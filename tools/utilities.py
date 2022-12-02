@@ -90,7 +90,7 @@ def symmetric_cells(n, m, i=None, j=None, sym=None):
                 return j * n + i
             return (n - 1 - j) * n + (n - 1 - i)  # d2 flip
 
-        if i is not None:
+        if i is not None:  # and so j is not None
             return [sqr_index(i, j, k) for k in TypeSquareSymmetry] if sym is None else sqr_index(i, j, sym)
         if sym is None:
             return [[sqr_index(i, j, k) for i in range(n) for j in range(m)] for k in TypeSquareSymmetry]
@@ -100,6 +100,8 @@ def symmetric_cells(n, m, i=None, j=None, sym=None):
         def rect_index(i, j, k):
             if k == TypeRectangleSymmetry.R0:
                 return i * m + j
+            if k == TypeSquareSymmetry.R180:  # not present in Minizinc models
+                return (n - 1 - i) * m + (m - 1 - j)
             if k == TypeRectangleSymmetry.FX:  # x flip
                 return (n - 1 - i) * m + j
             return i * m + (m - 1 - j)  # y flip
@@ -109,6 +111,31 @@ def symmetric_cells(n, m, i=None, j=None, sym=None):
         if sym is None:
             return [[rect_index(i, j, k) for i in range(n) for j in range(m)] for k in TypeRectangleSymmetry]
         return [rect_index(i, j, sym) for i in range(n) for j in range(m)]
+
+
+def symmetries_of_pattern(pattern):
+    """
+    Returns all symmetric patterns of the specified one (can be useful for computing symmetric variants of polyominoes)
+
+    :param pattern: a pattern given as a set of relative coordinates
+    :return: all symmetric patterns of the specified one
+    """
+
+    def _normalize(p):
+        minx, miny = min(i for i, _ in p), min(j for _, j in p)
+        return tuple((i - minx, j - miny) for i, j in p) if minx != 0 or miny != 0 else tuple(p)
+
+    pattern = _normalize(pattern)
+    # computing the size of the square (so as to be able to produce symmetric patterns)
+    n = max(max(i, j) for i, j in pattern) + 1  # +1 because starting at 0
+    s1 = [tuple(sorted(list(symmetric_cells(n, n, i, j, k) for i, j in pattern))) for k in TypeSquareSymmetry]
+    s2 = {_normalize([(v // n, v % n) for v in t]) for t in s1}
+    s3 = []
+    for t in s2:
+        assert min(i for i, _ in t) == 0
+        gap = min(j for i, j in t if i == 0)
+        s3.append(tuple((i, j - gap) for i, j in t))
+    return s3  # [tuple(i * n + j for i, j in t) for t in s3]
 
 
 def flatten(*args, keep_none=False):
@@ -173,16 +200,16 @@ def unique_type_in(l, tpe=None):
         return None if l is None else type(l) if tpe is None else tpe if isinstance(l, tpe) else False
 
 
-def is_1d_list(l, types=None):
-    if not isinstance(l, list) or types is not None and len(l) == 0:
-        return False
-    return all(isinstance(v, types) if types else not isinstance(v, list) for v in l)
-
-
 def is_1d_tuple(l, types):
     if not isinstance(l, tuple) or types is not None and len(l) == 0:
         return False
     return all(isinstance(v, types) for v in l)
+
+
+def is_1d_list(l, types=None):
+    if not isinstance(l, list) or types is not None and len(l) == 0:
+        return False
+    return all(isinstance(v, types) if types else not isinstance(v, list) for v in l)
 
 
 def is_2d_list(m, types=None):
@@ -195,6 +222,14 @@ def is_matrix(m, types=None):
 
 def is_square_matrix(m, types=None):
     return is_matrix(m, types) and len(m) == len(m[0])
+
+
+def is_3d_list(c, types=None):
+    return isinstance(c, list) and all(is_2d_list(m, types) for m in c)
+
+
+def is_cube(c, types=None):
+    return is_3d_list(c, types) and all(len(m) == len(c[0]) for m in c) and all(all(len(l) == len(m[0]) for l in m) for m in c)
 
 
 def alphabet_positions(s):

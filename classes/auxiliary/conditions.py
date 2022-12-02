@@ -123,7 +123,7 @@ class ConditionNode(Condition):
         return {self}
 
     def str_tuple(self):
-        return (TypeConditionOperator.to_utf(self.operator) if self.operator != EQ else "") + self.node.__strsmart__()
+        return (TypeConditionOperator.to_utf(self.operator) if self.operator != EQ else "") + self.node.__str_hybrid__()
 
     def right_operand(self):
         return self.node
@@ -227,6 +227,8 @@ class ConditionSet(Condition):
 def _build_condition(operator, v):
     if isinstance(v, int):
         return ConditionValue(operator, v)
+    if isinstance(v, Variable):
+        return ConditionVariable(operator, v)
     if isinstance(v, Node):
         # {eq|lt|le|ge|gt|ne}{var|interger}{+|-}{var|interger}
         return ConditionNode(operator, v)

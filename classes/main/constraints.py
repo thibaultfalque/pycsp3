@@ -2,7 +2,7 @@ import os
 from collections import OrderedDict
 
 from pycsp3 import functions
-from pycsp3.classes.auxiliary.conditions import Condition, ConditionInterval, ConditionSet
+from pycsp3.classes.auxiliary.conditions import Condition, ConditionInterval, ConditionSet, ConditionNode
 from pycsp3.classes.auxiliary.ptypes import TypeVar, TypeCtr, TypeCtrArg, TypeXML, TypeConditionOperator, TypeRank
 from pycsp3.classes.auxiliary.values import IntegerEntity
 from pycsp3.classes.entities import EVarArray, ECtr, EMetaCtr, TypeNode, Node, possible_range
@@ -200,7 +200,7 @@ class ConstraintExtension(Constraint):
     cache_for_knowing_if_hybrid = dict()
 
     @staticmethod
-    def convert_smart_to_ordinary(scope, table):
+    def convert_hybrid_to_ordinary(scope, table):
         for i, t in enumerate(table):
             tpl = None
             for j, v in enumerate(t):
@@ -245,7 +245,7 @@ class ConstraintExtension(Constraint):
             return None
         # we compute the hash code of the table
         try:
-            h = hash(tuple(table))
+            h = hash(tuple(table) + (self.keep_hybrid,))  # if ever we change the value of keep_hybrid
         except TypeError:
             for i, t in enumerate(table):
                 if any(isinstance(v, set) for v in t):
@@ -261,10 +261,26 @@ class ConstraintExtension(Constraint):
         if h in ConstraintExtension.cache_for_knowing_if_hybrid:
             hybrid = ConstraintExtension.cache_for_knowing_if_hybrid[h]
         else:
-            hybrid = any(not (isinstance(v, (int, str)) or v == ANY) for t in table for v in t)  # A parallelisation attempt showed no gain.
+            check_hybrid2 = True
+            hybrid = 0
+            for t in table:
+                for v in t:
+                    error_if(isinstance(v, Node), "Bad form")
+                    if isinstance(v, ConditionNode):
+                        hybrid = 2
+                        if not check_hybrid2:
+                            break
+                        else:
+                            assert True  # TODO test to be written
+                    elif hybrid == 0 and not (isinstance(v, (int, str)) or v is ANY):
+                        hybrid = 1
+                if hybrid == 2:
+                    if not check_hybrid2:
+                        break
+            # hybrid = any(not (isinstance(v, (int, str)) or v == ANY) for t in table for v in t)  # A parallelisation attempt showed no gain.
             ConstraintExtension.cache_for_knowing_if_hybrid[h] = hybrid
 
-        if not hybrid:
+        if hybrid == 0:  # if not hybrid
             if not self.restrict_table_wrt_domains:
                 if h not in ConstraintExtension.cache:  # we can directly use caching here (without paying attention to domains)
                     table.sort()
@@ -281,9 +297,9 @@ class ConstraintExtension(Constraint):
                 table_s = table_to_string(table, restricting_domains=domains, parallel=possible_parallelism)
                 ConstraintExtension.cache[h] = (domains, table_s)
                 return table_s
-        else:  # it is hybrid
+        else:  # it is hybrid (level 1 or 2)
             if self.keep_hybrid:  # currently, no restriction of tables (wrt domains) in that case
-                self.attributes.append((TypeXML.TYPE, "hybrid"))
+                self.attributes.append((TypeXML.TYPE, "hybrid-" + str(hybrid)))
                 if h not in ConstraintExtension.cache:
                     table = ConstraintExtension.remove_redundant_tuples(table)
                     ConstraintExtension.cache[h] = table_to_string(table, parallel=possible_parallelism)
@@ -294,7 +310,7 @@ class ConstraintExtension(Constraint):
                     domains_cache, table_cache = ConstraintExtension.cache[h]
                     if domains == domains_cache:
                         return table_cache
-                table = ConstraintExtension.convert_smart_to_ordinary(scope, table)
+                table = ConstraintExtension.convert_hybrid_to_ordinary(scope, table)
                 table = ConstraintExtension.remove_redundant_tuples(table)
                 table_s = table_to_string(table, restricting_domains=domains if self.restrict_table_wrt_domains else None, parallel=possible_parallelism)
                 ConstraintExtension.cache[h] = (domains, table_s)
@@ -373,9 +389,17 @@ class ConstraintAllDifferentMatrix(ConstraintUnmergeable):
 
 
 class ConstraintAllEqual(Constraint):
-    def __init__(self, lst):
+    def __init__(self, lst, excepting):
         super().__init__(TypeCtr.ALL_EQUAL)
         self.arg(TypeCtrArg.LIST, lst)
+        self.arg(TypeCtrArg.EXCEPT, excepting)
+
+
+class ConstraintAllEqualList(ConstraintUnmergeable):
+    def __init__(self, lst, excepting):
+        super().__init__(TypeCtr.ALL_EQUAL)
+        self.arg(TypeCtrArg.LIST, lst, content_ordered=True, lifted=True)
+        self.arg(TypeCtrArg.EXCEPT, "(" + ",".join(str(v) for v in excepting) + ")" if excepting else excepting)
 
 
 class ConstraintOrdered(Constraint):
@@ -401,10 +425,12 @@ class ConstraintLexMatrix(ConstraintUnmergeable):
 
 
 class ConstraintPrecedence(Constraint):
-    def __init__(self, lst, values, covered=False):
+    def __init__(self, lst, *, values=None, covered=False):
         super().__init__(TypeCtr.PRECEDENCE)
         self.arg(TypeCtrArg.LIST, lst, content_ordered=True)
-        self.arg(TypeCtrArg.VALUES, list(values), attributes=[(TypeCtrArg.COVERED, "true")] if covered else [], content_ordered=True)
+        assert covered is False or values is not None
+        if values is not None:
+            self.arg(TypeCtrArg.VALUES, values, attributes=[(TypeCtrArg.COVERED, "true")] if covered else [], content_ordered=True)
 
 
 ''' Counting and Summing Constraints '''
@@ -666,26 +692,30 @@ class ConstraintCumulative(Constraint):  # TODO inheriting from ConstraintWithCo
 
 
 class ConstraintBinPacking(ConstraintUnmergeable):
-    def __init__(self, lst, sizes, loads=None, condition=None):
+    def __init__(self, lst, sizes, *, limits=None, loads=None, condition=None):
         super().__init__(TypeCtr.BIN_PACKING)
         self.arg(TypeCtrArg.LIST, lst, content_ordered=True)
         self.arg(TypeCtrArg.SIZES, sizes, content_ordered=True)
-        if loads is not None:
-            self.arg(TypeCtrArg.CONDITIONS, "".join("(eq," + str(x) + ")" for x in loads))
+        if limits is not None:
+            assert isinstance(limits, list) and loads is None and condition is None
+            self.arg(TypeCtrArg.LIMITS, limits, content_ordered=True)
+        elif loads is not None:
+            assert isinstance(loads, list) and limits is None and condition is None
+            self.arg(TypeCtrArg.LOADS, loads, content_ordered=True)
         else:
             self.arg(TypeCtrArg.CONDITION, condition)
 
 
 class ConstraintKnapsack(ConstraintWithCondition):
-    def __init__(self, lst, weights, profits, limit, condition):
+    def __init__(self, lst, weights, wcondition, profits, pcondition):
         super().__init__(TypeCtr.KNAPSACK)
         self.vars = lst
         self.profits = profits
         self.arg(TypeCtrArg.LIST, lst, content_ordered=True)
         self.arg(TypeCtrArg.WEIGHTS, weights, content_ordered=True)
+        self.arg(TypeCtrArg.LIMIT, wcondition)  # temporarily, we use LIMIT (but will be replaced by CONDITION later)
         self.arg(TypeCtrArg.PROFITS, profits, content_ordered=True)
-        self.arg(TypeCtrArg.LIMIT, limit)
-        self.arg(TypeCtrArg.CONDITION, condition)
+        self.arg(TypeCtrArg.CONDITION, pcondition)
 
     def min_possible_value(self):
         return sum(self.vars[i].dom.smallest_value() * self.profits[i] for i in len(self.vars))
@@ -732,6 +762,7 @@ class ConstraintClause(Constraint):
 class ConstraintInstantiation(Constraint):
     def __init__(self, variables, values):
         super().__init__(TypeCtr.INSTANTIATION)
+        assert len(variables) == len(values)
         self.arg(TypeCtrArg.LIST, variables, content_ordered=True)
         self.arg(TypeCtrArg.VALUES, values, content_ordered=True)
 
@@ -775,6 +806,11 @@ class PartialConstraint:  # constraint whose condition has not been given such a
         return auxiliary().replace_partial_constraint(self), auxiliary().replace_partial_constraint(other)
 
     def __eq__(self, other):
+        if isinstance(self.constraint, ConstraintElement) and is_1d_list(other, int):
+            tab = self.constraint.arguments[TypeCtrArg.LIST].content
+            idx = self.constraint.arguments[TypeCtrArg.INDEX].content
+            assert is_matrix(tab, Variable) and len(tab[0]) == len(other)
+            return [tab[idx][i] == other[i] for i in range(len(other))]
         other = self._simplify_with_auxiliary_variables(other)
         if isinstance(self.constraint, (ConstraintElement, ConstraintElementMatrix)) and isinstance(other, (int, Variable)):
             if isinstance(self.constraint, ConstraintElement):
@@ -880,7 +916,8 @@ class PartialConstraint:  # constraint whose condition has not been given such a
             error("The type of the operand of the partial constraint is wrong as it is " + str(type(obj2)))
         obj1, obj2 = (obj1, obj2) if not inverted else (obj2, obj1)  # we invert back
         assert isinstance(obj1, PartialConstraint) and isinstance(obj2, PartialConstraint)
-        assert isinstance(obj1.constraint, ConstraintSum) and isinstance(obj2.constraint, ConstraintSum)
+        assert isinstance(obj1.constraint, ConstraintSum) and isinstance(obj2.constraint, ConstraintSum), str(type(obj1.constraint)) + " " + str(
+            type(obj2.constraint))
         args1, args2 = obj1.constraint.arguments, obj2.constraint.arguments
         vs1, vs2 = args1[TypeCtrArg.LIST].content, args2[TypeCtrArg.LIST].content
         cs1 = args1[TypeCtrArg.COEFFS].content if TypeCtrArg.COEFFS in args1 else [1] * len(vs1)
@@ -899,7 +936,22 @@ class ScalarProduct:
         assert len(self.variables) == len(self.coeffs), str(self.variables) + " " + str(self.coeffs)
 
     def _combine_with(self, operator, right_operand):
-        return PartialConstraint(ConstraintSum(self.variables, self.coeffs, None)).add_condition(operator, right_operand)
+        pc = PartialConstraint(ConstraintSum(self.variables, self.coeffs, None))
+        if isinstance(right_operand, Node) and right_operand.var_val_if_binary_type(TypeNode.MUL):
+            return pc.add_condition(operator, right_operand)
+        if operator == TypeConditionOperator.LT:
+            return pc < right_operand
+        if operator == TypeConditionOperator.LE:
+            return pc <= right_operand
+        if operator == TypeConditionOperator.GE:
+            return pc >= right_operand
+        if operator == TypeConditionOperator.GT:
+            return pc > right_operand
+        if operator == TypeConditionOperator.EQ:
+            return pc == right_operand
+        if operator == TypeConditionOperator.NE:
+            return pc != right_operand
+        assert False
 
     def __lt__(self, other):
         return self._combine_with(TypeConditionOperator.LT, other)
@@ -1057,6 +1109,11 @@ def global_indirection(c):
     pc = None
     if options.usemeta:
         return None  # to force using meta-constraints
+    if isinstance(c, ConstraintInstantiation):  # we transform instantiation into a conjunction (Node)
+        lst = c.arguments[TypeCtrArg.LIST].content
+        values = c.arguments[TypeCtrArg.VALUES].content
+        assert len(lst) == len(values)
+        return functions.conjunction(lst[i] == values[i] for i in range(len(lst)))
     if isinstance(c, ConstraintWithCondition):
         condition = c.arguments[TypeCtrArg.CONDITION].content
         c.arguments[TypeCtrArg.CONDITION] = None
@@ -1101,10 +1158,16 @@ def manage_global_indirection(*args):
             error_if(len(curser.queue_in) == 0, msg)
             (values, x) = curser.queue_in.pop()
             arg = functions.belong(x, values)
-        elif arg is False:  # means that we must have a unary subexpression of the form 'x not in S' in a more general expression
+        elif arg is False:  # means that we must have in a more general expression:
+            # either a unary subexpression of the form 'x not in S'
+            # or a nogood of the form x != t where x a list of variables and t a list of values
             error_if(len(curser.queue_in) == 0, msg)
             (values, x) = curser.queue_in.pop()
-            arg = functions.not_belong(x, values)
+            if isinstance(x, list) and len(x) > 1 and isinstance(values, list) and len(values) == 1:
+                assert len(x) == len(values[0])
+                arg = functions.disjunction(x[i] != values[0][i] for i in range(len(x)))
+            else:
+                arg = functions.not_belong(x, values)
         elif isinstance(arg, ECtr):
             gi = global_indirection(arg.constraint)
             if gi is None:

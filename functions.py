@@ -2,7 +2,7 @@ import inspect
 import math
 import types
 
-from pycsp3.classes.auxiliary.conditions import Condition
+from pycsp3.classes.auxiliary.conditions import Condition, eq, le
 from pycsp3.classes.auxiliary.ptypes import TypeOrderedOperator, TypeConditionOperator, TypeVar, TypeCtr, TypeCtrArg, TypeRank
 from pycsp3.classes.auxiliary.structures import Automaton, MDD
 from pycsp3.classes.entities import (
@@ -13,10 +13,10 @@ from pycsp3.classes.main.annotations import (
     AnnotationRestarts)
 from pycsp3.classes.main.constraints import (
     ConstraintIntension, ConstraintExtension, ConstraintRegular, ConstraintMdd, ConstraintAllDifferent,
-    ConstraintAllDifferentList, ConstraintAllDifferentMatrix, ConstraintAllEqual, ConstraintOrdered, ConstraintLex, ConstraintLexMatrix, ConstraintPrecedence,
-    ConstraintSum, ConstraintCount, ConstraintNValues, ConstraintCardinality, ConstraintMaximum, ConstraintMinimum, ConstraintMaximumArg, ConstraintMinimumArg,
-    ConstraintElement, ConstraintChannel, ConstraintNoOverlap, ConstraintCumulative, ConstraintBinPacking, ConstraintKnapsack, ConstraintFlow,
-    ConstraintCircuit, ConstraintClause, PartialConstraint, ScalarProduct, auxiliary, manage_global_indirection)
+    ConstraintAllDifferentList, ConstraintAllDifferentMatrix, ConstraintAllEqual, ConstraintAllEqualList, ConstraintOrdered, ConstraintLex, ConstraintLexMatrix,
+    ConstraintPrecedence, ConstraintSum, ConstraintCount, ConstraintNValues, ConstraintCardinality, ConstraintMaximum, ConstraintMinimum, ConstraintMaximumArg,
+    ConstraintMinimumArg, ConstraintElement, ConstraintChannel, ConstraintNoOverlap, ConstraintCumulative, ConstraintBinPacking, ConstraintKnapsack,
+    ConstraintFlow, ConstraintCircuit, ConstraintClause, PartialConstraint, ScalarProduct, auxiliary, manage_global_indirection)
 from pycsp3.classes.main.domains import Domain
 from pycsp3.classes.main.objectives import ObjectiveExpression, ObjectivePartial
 from pycsp3.classes.main.variables import Variable, VariableInteger, VariableSymbolic
@@ -524,6 +524,9 @@ def _Extension(*, scope, table, positive=True):
                 table[i] = tuple(t)
             else:
                 assert isinstance(t, tuple), str(t)
+            # we now manage shortcut expressions as in col(i) instead of eq(col(i)), and discard trivial ranges
+            if any(isinstance(v, (range, Node)) for v in t):
+                table[i] = tuple(eq(v) if isinstance(v, Node) else v.start if isinstance(v, range) and len(v) == 1 else v for v in t)
             assert len(t) == len(scope), ("The length of each tuple must be the same as the arity."
                                           + "Maybe a problem with slicing: you must for example write x#[i:i+3,0] instead of x[i:i+3][0]")
     return ECtr(ConstraintExtension(scope, table, positive, options.keephybrid, options.restricttableswrtdomains))
@@ -551,6 +554,8 @@ def abs(arg):
 
     :return: either a node, root of a tree expression, or the absolute value of the specified argument
     """
+    if isinstance(arg, PartialConstraint):
+        arg = auxiliary().replace_partial_constraint(arg)
     if isinstance(arg, Node) and arg.type == TypeNode.SUB:
         return Node.build(TypeNode.DIST, arg.sons)
     return Node.build(TypeNode.ABS, arg) if isinstance(arg, (Node, Variable)) else absPython(arg)
@@ -590,6 +595,7 @@ def xor(*args):
     """
     if len(args) == 1 and isinstance(args[0], (tuple, list, set, frozenset, types.GeneratorType)):
         args = tuple(args[0])
+    args = [v if not isinstance(v, (tuple, list)) else v[0] if len(v) == 1 else conjunction(v) for v in args]
     return args[0] ^ args[1] if len(args) == 2 else Node.build(TypeNode.XOR, *args) if len(args) > 1 else args[0]
 
 
@@ -606,8 +612,8 @@ def iff(*args):
     res = manage_global_indirection(*args)
     if res is None:
         return Iff(args)
-    args = res
-    return args[0] == args[1] if len(args) == 2 else Node.build(TypeNode.IFF, *args)
+    res = [v if not isinstance(v, (tuple, list)) else v[0] if len(v) == 1 else conjunction(v) for v in res]
+    return res[0] == res[1] if len(res) == 2 else Node.build(TypeNode.IFF, *res)
 
 
 def imply(*args):
@@ -622,6 +628,7 @@ def imply(*args):
     res = manage_global_indirection(*args)
     if res is None:
         return IfThen(args)
+    res = [v if not isinstance(v, (tuple, list)) else v[0] if len(v) == 1 else conjunction(v) for v in res]
     return Node.build(TypeNode.IMP, *res)
 
 
@@ -637,6 +644,7 @@ def ift(*args):
     res = manage_global_indirection(*args)
     if res is None:
         return IfThenElse(args)
+    res = [v if not isinstance(v, (tuple, list)) else v[0] if len(v) == 1 else conjunction(v) for v in res]
     return Node.build(TypeNode.IF, *res)
 
 
@@ -767,24 +775,51 @@ def AllDifferentList(term, *others, excepting=None):
         term = list((term,) + others)
     lists = [flatten(l) for l in term]
     assert all(checkType(l, [Variable]) for l in lists)
-    excepting = list(excepting) if isinstance(excepting, tuple) else excepting
+    excepting = list(excepting) if isinstance(excepting, (tuple, range)) else excepting
     checkType(excepting, ([int], type(None)))
     assert all(len(l) == len(lists[0]) for l in lists) and (excepting is None or len(excepting) == len(lists[0]))
     return ECtr(ConstraintAllDifferentList(lists, excepting))
 
 
-def AllEqual(term, *others):
+def AllEqual(term, *others, excepting=None):
     """
     Builds and returns a constraint AllEqual.
 
     :param term: the first term on which the constraint applies
     :param others: the other terms (if any) on which the constraint applies
+    :param excepting: the value(s) that must be ignored (None, most of the time)
     :return: a constraint AllEqual
     """
+    excepting = list(excepting) if isinstance(excepting, (tuple, set)) else [excepting] if isinstance(excepting, int) else excepting
+    checkType(excepting, ([int], type(None)))
     terms = flatten(term, others)
     auxiliary().replace_partial_constraints_and_constraints_with_condition_and_possibly_nodes(terms, nodes_too=options.mini)
     checkType(terms, ([Variable], [Node]))
-    return ECtr(ConstraintAllEqual(terms))
+    return ECtr(ConstraintAllEqual(terms, excepting))
+
+
+def AllEqualList(term, *others, excepting=None):
+    """
+    Builds and returns a constraint AllEqualList. In case only two lists are given, and excepting is None,
+    a group of intensional constraints of the form x[i] == y[i] is posted
+
+    :param term: the first term on which the constraint applies
+    :param others: the other terms (if any) on which the constraint applies
+    :param excepting: the tuple(s) that must be ignored (None, most of the time)
+    :return: a constraint AllEqualList
+    """
+    if isinstance(term, types.GeneratorType):
+        term = [l for l in term]
+    elif len(others) > 0:
+        term = list((term,) + others)
+    lists = [flatten(l) for l in term]
+    assert all(checkType(l, [Variable]) for l in lists)
+    excepting = list(excepting) if isinstance(excepting, (tuple, range)) else excepting
+    checkType(excepting, ([int], type(None)))
+    assert all(len(l) == len(lists[0]) for l in lists) and (excepting is None or len(excepting) == len(lists[0]))
+    if len(lists) == 2 and excepting is None:
+        return [lists[0][i] == lists[1][i] for i in range(len(lists[0]))]
+    return ECtr(ConstraintAllEqualList(lists, excepting))
 
 
 def _ordered(term, others, operator, lengths):
@@ -831,6 +866,10 @@ def _lex(term, others, operator, matrix):
     if len(others) == 0:
         assert is_matrix(term, Variable)
         lists = [flatten(l) for l in term]
+    elif not is_1d_list(term, Variable):
+        l1, l2 = flatten(term), flatten(others)
+        assert len(l1) == len(l2)
+        lists = [l1, l2]
     else:
         assert is_1d_list(term, Variable) and all(is_1d_list(l, Variable) for l in others)
         lists = [flatten(term)] + [flatten(l) for l in others]
@@ -879,11 +918,15 @@ def Precedence(scope, *, values=None, covered=False):
     """
     assert len(scope) > 2
     if values is None:
-        assert all(scope[i].dom == scope[0].dom for i in range(1, len(scope)))
-        values = scope[0].dom.original_values
+        return ECtr(ConstraintPrecedence(flatten(scope)))
+        # assert all(scope[i].dom == scope[0].dom for i in range(1, len(scope)))
+        # values = scope[0].dom.all_values()
+    assert isinstance(values, (range, list))
+    values = list(values)
     if len(values) > 1:
-        return ECtr(ConstraintPrecedence(flatten(scope), values, covered))
+        return ECtr(ConstraintPrecedence(flatten(scope), values=values, covered=covered))
     else:
+        # TODO : warning ?
         return None
 
 
@@ -1111,35 +1154,35 @@ def Minimum(term, *others, condition=None):
     return _wrapping_by_complete_or_partial_constraint(c) if isinstance(c, ConstraintMinimum) else c
 
 
-def MaximumArg(term, *others, type_rank=None, condition=None):
+def MaximumArg(term, *others, rank=None, condition=None):
     """
     Builds and returns a component MaximumArg (that becomes a constraint when subject to a condition).
 
     :param term: the first term on which the maximum applies
     :param others: the other terms (if any) on which the maximum applies
-    :param type_rank: ranking condition on the index (ANY, FIRST or LAST)
+    :param rank: ranking condition on the index (ANY, FIRST or LAST); ANY if None
     :param condition: a condition directly specified for the maximum (typically, None)
     :return: a component/constraint MaximumArg
     """
     terms = _extremum_terms(term, others)
-    checkType(type_rank, (type(None), TypeRank))
-    c = ConstraintMaximumArg(terms, type_rank, condition)
+    checkType(rank, (type(None), TypeRank))
+    c = ConstraintMaximumArg(terms, rank, condition)
     return _wrapping_by_complete_or_partial_constraint(c) if isinstance(c, ConstraintMaximumArg) else c
 
 
-def MinimumArg(term, *others, type_rank=None, condition=None):
+def MinimumArg(term, *others, rank=None, condition=None):
     """
     Builds and returns a component MinimumArg (that becomes a constraint when subject to a condition).
 
     :param term: the first term on which the maximum applies
     :param others: the other terms (if any) on which the maximum applies
-    :param type_rank: ranking condition on the index (ANY, FIRST or LAST)
+    :param rank: ranking condition on the index (ANY, FIRST or LAST); ANY if None
     :param condition: a condition directly specified for the maximum (typically, None)
     :return: a component/constraint MinimumArg
     """
     terms = _extremum_terms(term, others)
-    checkType(type_rank, (type(None), TypeRank))
-    c = ConstraintMinimumArg(terms, type_rank, condition)
+    checkType(rank, (type(None), TypeRank))
+    c = ConstraintMinimumArg(terms, rank, condition)
     return _wrapping_by_complete_or_partial_constraint(c) if isinstance(c, ConstraintMinimumArg) else c
 
 
@@ -1264,14 +1307,20 @@ def Cumulative(tasks=None, *, origins=None, lengths=None, ends=None, heights=Non
     return _wrapping_by_complete_or_partial_constraint(ConstraintCumulative(origins, lengths, ends, heights, Condition.build_condition(condition)))
 
 
-def BinPacking(term, *others, sizes, loads=None, condition=None):
+def BinPacking(term, *others, sizes, limits=None, loads=None, condition=None):
     """
-    Builds and returns a component BinPacking (that becomes a constraint when subject to a condition).
+    Builds and returns a component BinPacking that:
+      - either is directly a constraint when capacities (limits or loads) are given
+      - or becomes a constraint when subject to a condition (specified outside the function)
+    Capacities can be given by integers or variables, by specifying either limits or loads.
+    When capacities are absent (both limits and loads being None), BinPacking is a component
+    that must be subject to a condition, typically '<= k' where k is a value used as the same limit for all bins.
 
     :param term: the first term on which the component applies
     :param others: the other terms (if any) on which the component applies
-    :param sizes: the sizes of the available bins
-    :param loads: the loads of all bins
+    :param sizes: the sizes of the available items
+    :param limits: the limits of bins (if loads is None)
+    :param loads: the loads of bins (if limits is None)
     :param condition: a condition directly specified for the BinPacking (typically, None)
     :return: a component/constraint BinPacking
     """
@@ -1283,18 +1332,45 @@ def BinPacking(term, *others, sizes, loads=None, condition=None):
     sizes = flatten(sizes)
     checkType(sizes, [int])
     assert len(terms) == len(sizes)
-    assert loads is None or condition is None
+    assert limits is None or loads is None
+    if limits is not None:
+        assert condition is None
+        checkType(limits, ([Variable], [int]))
+        return ECtr(ConstraintBinPacking(terms, sizes, limits=limits))
     if loads is not None:
-        return ECtr(ConstraintBinPacking(terms, sizes, loads))
-    return _wrapping_by_complete_or_partial_constraint(ConstraintBinPacking(terms, sizes, loads, Condition.build_condition(condition)))
+        assert condition is None
+        checkType(loads, ([Variable], [int]))
+        return ECtr(ConstraintBinPacking(terms, sizes, loads=loads))
+    return _wrapping_by_complete_or_partial_constraint(ConstraintBinPacking(terms, sizes, condition=Condition.build_condition(condition)))
 
 
-def Knapsack(term, *others, weights, profits, limit, condition=None):
+def Knapsack(term, *others, weights, wlimit=None, wcondition=None, profits, pcondition=None):
+    """
+    Builds and returns a component Knapsack that must guarantee that a condition holds wrt the capacity of the knapsack
+    (when considering accumulated weights of selected items) and another condition holds wrt the profits.
+    The second condition is typically specified outside the function which then represents ("returns")
+    the accumulated profits of selected items.
+    One has to specify either wlimit or wcondition.
+
+    :param term: the first term on which the component applies
+    :param others: the other terms (if any) on which the component applies
+    :param weights: the weights associated with the items
+    :param wlimit: the limit of the knapsack (if wcondition is None)
+    :param wcondition: the condition on the knapsack (if wlimit is None)
+    :param profits: the benefits associated with the items
+    :param pcondition: a condition on the profits directly specified for the Knapsack (typically, None)
+    :return: a component/constraint Knapsack
+    """
+
     terms = flatten(term, others)
     assert len(terms) > 0, "A Knapsack with an empty scope"
     assert len(terms) == len(weights) == len(profits)
-    checkType(limit, (int, Variable))
-    return _wrapping_by_complete_or_partial_constraint(ConstraintKnapsack(terms, weights, profits, limit, Condition.build_condition(condition)))
+    assert (wlimit is None) != (wcondition is None)
+    if wlimit:
+        checkType(wlimit, (int, Variable))
+        wcondition = le(wlimit)
+    checkType(wcondition, Condition)
+    return _wrapping_by_complete_or_partial_constraint(ConstraintKnapsack(terms, weights, wcondition, profits, Condition.build_condition(pcondition)))
 
 
 def Flow(term, *others, balance, arcs, weights=None, condition=None):

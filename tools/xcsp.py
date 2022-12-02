@@ -3,8 +3,8 @@ from collections import OrderedDict
 from lxml import etree
 
 from pycsp3.classes.auxiliary.ptypes import TypeFramework, TypeConditionOperator, TypeXML, TypeVar, TypeCtr, TypeCtrArg
-from pycsp3.classes.entities import Entity, EVar, EVarArray, ECtr, EMetaCtr, EObjective, EAnnotation, EGroup, \
-    EBlock, ESlide, EIfThenElse, EToGather, EToSatisfy, CtrEntities, VarEntities, ObjEntities, AnnEntities
+from pycsp3.classes.entities import (Entity, EVar, EVarArray, ECtr, EMetaCtr, EObjective, EAnnotation, EGroup, EBlock, ESlide, EIfThenElse, EToGather,
+                                     EToSatisfy, CtrEntities, VarEntities, ObjEntities, AnnEntities)
 from pycsp3.classes.main.constraints import ConstraintIntension
 from pycsp3.dashboard import options
 from pycsp3.tools.compactor import compact
@@ -98,6 +98,8 @@ def _variables():
 
 def _argument(elt, arg, key, value, change_element_value=False):
     assert value is not None
+    if key == TypeCtrArg.LIMIT:  # we modify the name of the argument for constraint knapsack
+        key = TypeCtrArg.CONDITION
     if arg.lifted is True:  # TODO do we have an example? (3-tuples for attributes in this case?)
         for i, l in enumerate(value):
             subelt = _element(key, text=l)
