@@ -102,11 +102,14 @@ def _load_data():
                 compilation_data[t[0]] = value
                 s += "-" + str(value)
             else:
-                assert arg.endswith("json")
-                assert os.path.exists(arg), "The file " + arg + " does not exist (in the specified directory)." + str(os.path)
-                with open(arg) as f:
-                    compilation_data.update(json.loads(f.read(), object_pairs_hook=OrderedDict))
-                    s += "-" + _basic_token(arg)
+                #assert arg.endswith("json")
+                #assert os.path.exists(arg), "The file " + arg + " does not exist (in the specified directory)." + str(os.path)
+                if os.path.exists(arg):
+                    with open(arg) as f:
+                        compilation_data.update(json.loads(f.read(), object_pairs_hook=OrderedDict))
+                else:
+                    compilation_data.update(json.load(sys.stdin, object_pairs_hook=OrderedDict))
+                s += "-" + _basic_token(arg)
         return compilation_data, s
 
     data = options.data
@@ -126,7 +129,7 @@ def _load_data():
     #    for k, v in compilation_data.items(): setattr(compilation_data, k, v)  ordered_data = list(compilation_data.values())
     if (data[0], data[-1]) in [('[', ']'), ('(', ')')]:  # NB: these characters may be needed to be escaped as in \[2,3\]
         args = data[1:-1].split(",")
-        if "json" in data:
+        if "json" in data or "stdin" in data:
             return _load_multiple_data_pieces()
         if '=' in data:
             assert data.count('=') == data.count(',') + 1, "badly formed string of data " + data

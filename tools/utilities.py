@@ -461,7 +461,8 @@ class Error:
 
 
 def warning(message):
-    print("\n  " + ORANGE + "Warning: " + WHITE + message)
+    if options.dw:
+        print("\n  " + ORANGE + "Warning: " + WHITE + message)
 
 
 def error(s):
