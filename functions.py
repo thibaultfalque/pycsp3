@@ -14,9 +14,10 @@ from pycsp3.classes.main.annotations import (
 from pycsp3.classes.main.constraints import (
     ConstraintIntension, ConstraintExtension, ConstraintRegular, ConstraintMdd, ConstraintAllDifferent,
     ConstraintAllDifferentList, ConstraintAllDifferentMatrix, ConstraintAllEqual, ConstraintAllEqualList, ConstraintOrdered, ConstraintLex, ConstraintLexMatrix,
-    ConstraintPrecedence, ConstraintSum, ConstraintCount, ConstraintNValues, ConstraintCardinality, ConstraintMaximum, ConstraintMinimum, ConstraintMaximumArg,
-    ConstraintMinimumArg, ConstraintElement, ConstraintChannel, ConstraintNoOverlap, ConstraintCumulative, ConstraintBinPacking, ConstraintKnapsack,
-    ConstraintFlow, ConstraintCircuit, ConstraintClause, PartialConstraint, ScalarProduct, auxiliary, manage_global_indirection)
+    ConstraintPrecedence, ConstraintSum, ConstraintCount, ConstraintNValues, ConstraintCardinality, ConstraintMaximum,
+    ConstraintMinimum, ConstraintMaximumArg, ConstraintMinimumArg, ConstraintElement, ConstraintChannel, ConstraintNoOverlap, ConstraintCumulative,
+    ConstraintBinPacking, ConstraintKnapsack, ConstraintFlow, ConstraintCircuit, ConstraintClause, PartialConstraint, ScalarProduct, auxiliary,
+    manage_global_indirection)
 from pycsp3.classes.main.domains import Domain
 from pycsp3.classes.main.objectives import ObjectiveExpression, ObjectivePartial
 from pycsp3.classes.main.variables import Variable, VariableInteger, VariableSymbolic
@@ -181,7 +182,7 @@ def VarArray(doms=None, *, size=None, dom=None, id=None, comment=None):
         error_if(any(v in Variable.name2obj for v in ext_name), "Some identifiers in " + str(ext_name) + " are used twice.")
     else:
         array_name = id if id else ext_name  # the specified name, if present, has priority
-        error_if(array_name is None or not _valid_identifier(array_name), "The variable identifier " + str(array_name) + " is not valid")
+        error_if(not _valid_identifier(array_name), "The variable identifier " + str(array_name) + " is not valid")
         error_if(array_name in Variable.name2obj, "The identifier " + str(array_name) + " is used twice. This is not possible")
 
     if comment is None and not isinstance(array_name, list):
@@ -417,7 +418,7 @@ def satisfy(*args, no_comment_tags_extraction=False):
             reordered_entities = []
             g = []
             for c in _entities:
-                if isinstance(c, ECtr):
+                if isinstance(c, ECtr) and c.blank_basic_attributes():
                     g.append(c)
                 else:
                     if len(g) != 0:
@@ -451,6 +452,14 @@ def satisfy(*args, no_comment_tags_extraction=False):
 
     t = []
     for i, arg in enumerate(args):
+        if isinstance(arg, list) and any(v is None for v in arg):
+            # TODO: what if there is a trailing comma?
+            if len(arg) == len(comments2[i]):
+                comments2[i] = [c for i, c in enumerate(comments2[i]) if arg[i] is not None]
+            if len(arg) == len(tags2[i]):
+                tags2[i] = [c for i, c in enumerate(tags2[i]) if arg[i] is not None]
+            arg = [v for v in arg if v is not None]
+
         if isinstance(arg, list) and len(arg) > 0:
             if isinstance(arg[0], tuple):
                 arg = _reorder(arg)
@@ -467,6 +476,7 @@ def satisfy(*args, no_comment_tags_extraction=False):
             continue
         arg = list(arg) if isinstance(arg, types.GeneratorType) else arg
         comment_at_2 = any(comment != '' for comment in comments2[i])
+        tag_at_2 = any(tag != '' for tag in tags2[i])
         if isinstance(arg, (ECtr, EMetaCtr, ESlide)):  # case: simple constraint or slide
             to_post = _complete_partial_forms_of_constraints([arg])[0]
         elif isinstance(arg, Node):  # a predicate to be wrapped by a constraint (intension)
@@ -481,7 +491,11 @@ def satisfy(*args, no_comment_tags_extraction=False):
                 to_post = _group(to_post)
         elif any(isinstance(ele, ESlide) for ele in arg):  # Case: Slide
             to_post = _block(arg)
-        elif comment_at_2:  # Case: block
+        elif comment_at_2 or tag_at_2:  # Case: block
+            if len(arg) == len(comments2[i]) - 1 == len(tags2[i]) - 1 and comments2[i][-1] == "" and tags2[i][-1] == "":
+                # this avoids the annoying case where there is a comma at the end of the last line in a block
+                comments2[i] = comments2[i][:-1]
+                tags2[i] = tags2[i][:-1]
             if len(arg) == len(comments2[i]) == len(tags2[i]):  # if comments are not too wildly put
                 if isinstance(arg, tuple):
                     arg = list(arg)
@@ -489,7 +503,12 @@ def satisfy(*args, no_comment_tags_extraction=False):
                     if isinstance(arg[j], (ECtr, ESlide)):
                         arg[j].note(comments2[i][j]).tag(tags2[i][j])
                     elif comments2[i][j] or tags2[i][j]:
-                        arg[j] = _group(arg[j]).note(comments2[i][j]).tag(tags2[i][j])
+                        if isinstance(arg[j], list) and len(arg[j]) > 0 and isinstance(arg[j][0], list):
+                            for k, kele in enumerate(arg[j]):
+                                arg[j][k] = _group(arg[j][k])
+                            arg[j] = _block(arg[j]).note(comments2[i][j]).tag(tags2[i][j])
+                        else:
+                            arg[j] = _group(arg[j]).note(comments2[i][j]).tag(tags2[i][j])
             to_post = _block(arg)
         else:  # Group
             to_post = _group(arg)
@@ -501,6 +520,9 @@ def satisfy(*args, no_comment_tags_extraction=False):
     if to_post is not None:
         t.append(to_post)
     to_post = _group(auxiliary().raw_collected())
+    if to_post is not None:
+        t.append(to_post)
+    to_post = _group((index, aux) in table for (index, aux, table) in auxiliary().collected_extension_for_element())
     if to_post is not None:
         t.append(to_post)
     return EToSatisfy(t)
@@ -628,6 +650,8 @@ def imply(*args):
     res = manage_global_indirection(*args)
     if res is None:
         return IfThen(args)
+    if len(res) == 2 and isinstance(res[1], (tuple, list, set, frozenset)):
+        return [imply(res[0], v) for v in res[1]]
     res = [v if not isinstance(v, (tuple, list)) else v[0] if len(v) == 1 else conjunction(v) for v in res]
     return Node.build(TypeNode.IMP, *res)
 
@@ -645,6 +669,10 @@ def ift(*args):
     if res is None:
         return IfThenElse(args)
     res = [v if not isinstance(v, (tuple, list)) else v[0] if len(v) == 1 else conjunction(v) for v in res]
+    assert len(res) == 3
+    if isinstance(res[0], int):
+        assert res[0] in (0, 1)
+        return res[1] if res[0] == 1 else res[2]
     return Node.build(TypeNode.IF, *res)
 
 
@@ -824,8 +852,13 @@ def AllEqualList(term, *others, excepting=None):
 
 def _ordered(term, others, operator, lengths):
     terms = flatten(term, others)
+    auxiliary().replace_partial_constraints_and_constraints_with_condition_and_possibly_nodes(terms, nodes_too=True)
     checkType(terms, [Variable])
     checkType(operator, TypeOrderedOperator)
+    if isinstance(lengths, range):
+        lengths = list(lengths)
+    if isinstance(lengths, int):
+        lengths = [lengths] * (len(terms) - 1)
     checkType(lengths, ([int, Variable], type(None)))
     if lengths is not None:
         if len(terms) == len(lengths):
@@ -871,11 +904,15 @@ def _lex(term, others, operator, matrix):
         assert len(l1) == len(l2)
         lists = [l1, l2]
     else:
-        assert is_1d_list(term, Variable) and all(is_1d_list(l, Variable) for l in others)
-        lists = [flatten(term)] + [flatten(l) for l in others]
-    assert is_matrix(lists, Variable)  # new check because some null cells (variables) may have been discarded
+        if len(others) == 1 and is_1d_list(others[0], int):
+            assert matrix is False
+            lists = [flatten(term)] + [flatten(others[0])]
+        else:
+            assert all(is_1d_list(l, Variable) for l in others)
+            lists = [flatten(term)] + [flatten(l) for l in others]
+    assert is_matrix(lists)  # new check because some null cells (variables) may have been discarded
     assert all(len(l) == len(lists[0]) for l in lists)
-    checkType(lists, [Variable])
+    assert all(checkType(l, [int, Variable] if i == 1 else [Variable]) for i, l in enumerate(lists))
     checkType(operator, TypeOrderedOperator)
     return ECtr(ConstraintLexMatrix(lists, operator)) if matrix else ECtr(ConstraintLex(lists, operator))
 
@@ -921,7 +958,7 @@ def Precedence(scope, *, values=None, covered=False):
         return ECtr(ConstraintPrecedence(flatten(scope)))
         # assert all(scope[i].dom == scope[0].dom for i in range(1, len(scope)))
         # values = scope[0].dom.all_values()
-    assert isinstance(values, (range, list))
+    assert isinstance(values, (range, tuple, list))
     values = list(values)
     if len(values) > 1:
         return ECtr(ConstraintPrecedence(flatten(scope), values=values, covered=covered))
@@ -989,12 +1026,12 @@ def Sum(term, *others, condition=None):
             #    terms = [term for i, term in enumerate(terms) if coeffs[i] != 0]
             #    coeffs = [coeff for coeff in coeffs if coeff != 0]
             # if all(c == 1 for c in coeffs): coeffs = None
-            checkType(coeffs, ([Variable, int], type(None)))
+            checkType(coeffs, ([Node, Variable, int], type(None)))
             OpOverrider.enable()
         return terms, coeffs
 
     terms = flatten(list(term)) if isinstance(term, types.GeneratorType) else flatten(term, others)
-    checkType(terms, ([Variable], [Node], [PartialConstraint], [ScalarProduct], [ECtr]))
+    checkType(terms, ([Variable], [Node], [Variable, Node], [PartialConstraint], [ScalarProduct], [ECtr]))
     if len(terms) == 0:
         return 0  # None
     auxiliary().replace_partial_constraints_and_constraints_with_condition_and_possibly_nodes(terms, nodes_too=options.mini)
@@ -1014,6 +1051,24 @@ def Sum(term, *others, condition=None):
         # else  return ...  # TODO returning a unary (or binary) constraint terms[0] <op> k?
     # TODO control here some assumptions (empty list seems to be possible. See RLFAP)
     return _wrapping_by_complete_or_partial_constraint(ConstraintSum(terms, coeffs, Condition.build_condition(condition)))
+
+
+def Product(term, *others):
+    """
+    Builds and returns a node 'mul', root of a tree expression where specified arguments are children
+
+    :param term: the first term on which the product applies
+    :param others: the other terms (if any) on which the product applies
+    :return: a node, root of a tree expression
+    """
+
+    terms = flatten(term, others)
+    assert len(terms) > 0
+    for i, t in enumerate(terms):
+        if isinstance(t, PartialConstraint):
+            terms[i] = auxiliary().replace_partial_constraint(t)
+    checkType(terms, ([Variable], [Node]))
+    return Node.build(TypeNode.MUL, *terms)
 
 
 def Count(term, *others, value=None, values=None, condition=None):
@@ -1044,6 +1099,7 @@ def Count(term, *others, value=None, values=None, condition=None):
         values = [auxiliary().replace_partial_constraint(value)]
     elif isinstance(value, Node):
         values = [auxiliary().replace_node(value)]
+    values = sorted(set(values))  # ordered set of values
     checkType(values, ([int], [Variable]))
     return _wrapping_by_complete_or_partial_constraint(ConstraintCount(terms, values, Condition.build_condition(condition)))
 
@@ -1056,7 +1112,55 @@ def Exist(term, *others):
     :param others: the other terms (if any) on which the count applies
     :return: a constraint Count
     """
-    return Count(term, others) >= 1
+    # terms = flatten(term, others)
+    # if len(terms) == 0:
+    #     return 0
+    # if len(terms) == 1:
+    #     return terms[0]
+    res = Count(term, others)
+    if isinstance(res, int):
+        assert res == 0
+        return 0  # for false
+    return res >= 1
+
+
+def Neither(term, *others):
+    """
+    Builds and returns a constraint Sum that checks if all terms evaluate to false
+
+    :param term: the first term on which the sum applies
+    :param others: the other terms (if any) on which the sum applies
+    :return: a constraint Sum
+    """
+    return Sum(term, others) == 0
+
+
+def ExactlyOne(term, *others):
+    """
+    Builds and returns a constraint Sum that checks if exactly one term evaluates to true
+
+    :param term: the first term on which the sum applies
+    :param others: the other terms (if any) on which the sum applies
+    :return: a constraint Sum
+    """
+    return Sum(term, others) == 1
+
+
+def Hamming(term, *others):
+    """
+    Builds and returns a constraint Sum, corresponding to the Hamming distance of the two specified lists.
+
+    :param term: the first term on which the constraint applies
+    :param others: the other terms (if any) on which the constraint applies
+    :return: a constraint Sum
+    """
+    if isinstance(term, types.GeneratorType):
+        term = [l for l in term]
+    elif len(others) > 0:
+        term = list((term,) + others)
+    lists = [flatten(l) for l in term]
+    assert all(checkType(l, [Variable]) for l in lists) and len(lists) == 2 and len(lists[0]) == len(lists[1])
+    return Sum(lists[0][j] != lists[1][j] for j in range(len(lists[0])))
 
 
 def NValues(term, *others, excepting=None, condition=None):
@@ -1092,6 +1196,11 @@ def Cardinality(term, *others, occurrences, closed=False):
     :return: a Cardinality constraint
     """
     terms = flatten(term, others)
+    for i, t in enumerate(terms):
+        if isinstance(t, PartialConstraint):
+            terms[i] = auxiliary().replace_partial_constraint(t)
+        elif isinstance(t, Node):
+            terms[i] = [auxiliary().replace_node(t)]
     checkType(terms, [Variable])
     assert isinstance(occurrences, dict)
     values = list(occurrences.keys())
@@ -1210,6 +1319,19 @@ def Channel(list1, list2=None, *, start_index1=0, start_index2=0):
 ''' Packing and Scheduling Constraints '''
 
 
+def _is_mixed_list(t, index=-1):
+    present_int, present_var = False, False
+    for v in t:
+        v = v if index == -1 else v[index]
+        if isinstance(v, int):
+            present_int = True
+        elif isinstance(v, Variable):
+            present_var = True
+        if present_int and present_var:
+            return True
+    return False
+
+
 def NoOverlap(tasks=None, *, origins=None, lengths=None, zero_ignored=False):
     """
     Builds and returns a constraint NoOverlap.
@@ -1236,12 +1358,23 @@ def NoOverlap(tasks=None, *, origins=None, lengths=None, zero_ignored=False):
         origins = [(origins[0][i], origins[1][i]) for i in range(len(origins[0]))]
         lengths = [(lengths[0][i], lengths[1][i]) for i in range(len(lengths[0]))]
     checkType(origins, [int, Variable])
-    if not isinstance(origins[0], Variable) and not isinstance(origins[0], tuple):  # if 2d but not tuples
+    if not isinstance(origins[0], Variable) and not isinstance(origins[0], tuple):  # if 2D but not tuples
         origins = [tuple(origin) for origin in origins]
     lengths = [lengths for _ in range(len(origins))] if isinstance(lengths, int) else lengths
-    if not isinstance(lengths[0], (int, Variable)) and not isinstance(lengths[0], tuple):  # if 2d but not tuples
+    if not isinstance(lengths[0], (int, Variable)) and not isinstance(lengths[0], tuple):  # if 2D but not tuples
         lengths = [tuple(length) for length in lengths]
     checkType(lengths, ([int, Variable]))
+    if isinstance(origins, list) and len(origins) > 0 and isinstance(origins[0], tuple) and len(origins[0]) == 2:  # if 2D
+        # currently, only variables are authorized in origins
+        origins = [(auxiliary().replace_int(u) if isinstance(u, int) else u, auxiliary().replace_int(v) if isinstance(v, int) else v)
+                   for (u, v) in origins]
+    if isinstance(lengths, list) and len(lengths) > 0 and isinstance(lengths[0], tuple) and len(lengths[0]) == 2:  # if 2D
+        # currently, either only variables or only integers
+        b0 = _is_mixed_list(lengths, 0)
+        b1 = _is_mixed_list(lengths, 1)
+        if b0 or b1:
+            lengths = [(auxiliary().replace_int(u) if b0 and isinstance(u, int) else u, auxiliary().replace_int(v) if b1 and isinstance(v, int) else v)
+                       for (u, v) in lengths]
     if options.mini:
         assert zero_ignored is False  # for the moment
         t = []
@@ -1281,9 +1414,10 @@ def Cumulative(tasks=None, *, origins=None, lengths=None, ends=None, heights=Non
     :param condition: a condition directly specified for the Cumulative (typically, None)
     :return: a component/constraint Cumulative
     """
-    if tasks:
+    if tasks is not None:
         assert origins is None and lengths is None and ends is None and heights is None
         tasks = list(tasks) if isinstance(tasks, (tuple, set, frozenset, types.GeneratorType)) else tasks
+        assert len(tasks) > 0, "a cumulative constraint without no tasks"
         assert isinstance(tasks, list) and len(tasks) > 0
         v = len(tasks[0])
         assert v in (3, 4) and any(isinstance(task, (tuple, list)) and len(task) == v for task in tasks)
@@ -1292,10 +1426,17 @@ def Cumulative(tasks=None, *, origins=None, lengths=None, ends=None, heights=Non
         else:
             origins, lengths, ends, heights = zip(*tasks)
     origins = flatten(origins)
+    auxiliary().replace_partial_constraints_and_constraints_with_condition_and_possibly_nodes(origins, nodes_too=True)
+    if _is_mixed_list(origins):
+        origins = auxiliary().replace_ints(origins)
     checkType(origins, [Variable])
     lengths = [lengths for _ in range(len(origins))] if isinstance(lengths, int) else flatten(lengths)
+    if _is_mixed_list(lengths):
+        lengths = auxiliary().replace_ints(lengths)
     checkType(lengths, ([Variable], [int]))
     heights = [heights for _ in range(len(origins))] if isinstance(heights, int) else flatten(heights)
+    if _is_mixed_list(heights):
+        heights = auxiliary().replace_ints(heights)
     for i, h in enumerate(heights):
         if isinstance(h, PartialConstraint):
             heights[i] = auxiliary().replace_partial_constraint(h)
@@ -1431,7 +1572,30 @@ def Clause(term, *others, phases=None):
 
 
 def _optimize(term, minimization):
-    ObjEntities.items = []  # TODO currently, we overwrite the objective is one was posted
+    if options.tocsp:
+        if options.tocsp[0] in ('(', '['):
+            assert len(options.tocsp) > 5 and options.tocsp[-1] in (')', ']') and options.tocsp[3] == ','
+            op, k = options.tocsp[1:3], int(options.tocsp[4:-1])
+        else:
+            op, k = "eq", int(options.tocsp)
+        if isinstance(term, Node):
+            #  term.mark_as_used() # TODO do we need to do that?
+            return satisfy(expr(op, term, k), no_comment_tags_extraction=True)
+        op = TypeConditionOperator.value_of(op)
+        if op == TypeConditionOperator.LT:
+            return satisfy(term < k)
+        if op == TypeConditionOperator.LE:
+            return satisfy(term <= k)
+        if op == TypeConditionOperator.GE:
+            return satisfy(term >= k)
+        if op == TypeConditionOperator.GT:
+            return satisfy(term > k)
+        if op == TypeConditionOperator.EQ:
+            return satisfy(term == k)
+        assert op == TypeConditionOperator.NE
+        return satisfy(term != k)
+
+    ObjEntities.items = []  # TODO currently, we overwrite the objective if one was posted
     if isinstance(term, PartialConstraint) and isinstance(term.constraint, (ConstraintSum, ConstraintMaximum, ConstraintMinimum)):
         l = term.constraint.arguments[TypeCtrArg.LIST]
         if len(l.content) == 1 and TypeCtrArg.COEFFS not in term.constraint.arguments:
@@ -1440,6 +1604,7 @@ def _optimize(term, minimization):
         term = Sum(term)  # to have a PartialConstraint
     checkType(term, (Variable, Node, PartialConstraint)), "Did you forget to use Sum, e.g., as in Sum(x[i]*3 for i in range(10))"
     satisfy(pc == var for (pc, var) in auxiliary().collected())
+
     comment, _, tag, _ = comments_and_tags_of_parameters_of(function_name="minimize" if minimization else "maximize", args=[term])
     way = TypeCtr.MINIMIZE if minimization else TypeCtr.MAXIMIZE
     if isinstance(term, (Variable, Node)):

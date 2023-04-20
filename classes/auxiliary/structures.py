@@ -70,15 +70,18 @@ class Diagram:
 class Automaton(Diagram):
 
     @staticmethod
-    def q(i, j=None):
+    def q(i, j=None, k=None):
         """
         Returns the name of a state from the specified argument(s)
 
         :param i: the index of the state
         :param j: a secondary index
+        :param k: a third index
         :return: the name of a state from the specified argument(s)
         """
-        return "q" + str(i) + ("" if j is None else "x" + str(j))
+        assert j is not None or k is None
+        suffix = ("x" + str(j) if j is not None else "") + ("x" + str(k) if k is not None else "")
+        return "q" + str(i) + suffix
 
     @staticmethod
     def states_for(*values):
@@ -88,10 +91,10 @@ class Automaton(Diagram):
         :param values: a list of integers (or strings)
         :return: a list of names of states, one for each specified value
         """
-        values = flatten(values)
-        # if len(values) == 1:
-        #     if isinstance(values[0], types.GeneratorType):
-        #     values = [v for v in values[0]]
+        if len(values) == 1 and isinstance(values[0], (range, types.GeneratorType)):
+            values = list(values[0])
+        else:
+            values = flatten(values)
         assert len(values) > 0 and all(isinstance(v, (int, str)) for v in values), values
         return [Automaton.q(v) for v in values]
 
@@ -107,6 +110,35 @@ class Automaton(Diagram):
         self.start = start
         self.final = [final] if isinstance(final, str) else sorted(q for q in set(final) if q in self.states)
         assert isinstance(self.start, str) and all(isinstance(f, str) for f in self.final), Diagram.MSG_STATE
+
+    def deterministic_copy(self, scp):
+        nfa = {}
+        symbols = set()
+        for state1, symbol, state2 in self.flat_transitions(flatten(scp)):
+            symbols.add(symbol)
+            if state1 not in nfa:
+                nfa[state1] = {}
+            if symbol not in nfa[state1]:
+                nfa[state1][symbol] = []
+            nfa[state1][symbol].append(state2)
+        symbols = sorted(list(symbols))
+        dfa = {}
+        states = [self.start]
+        queue = [self.start]
+        while len(queue) != 0:
+            state1 = queue.pop(0)
+            dfa[state1] = {}
+            tokens = [v for v in state1.split('_')]
+            for symbol in symbols:
+                state2 = "_".join(v for tok in tokens if tok in nfa and symbol in nfa[tok] for v in nfa[tok][symbol])
+                if len(state2) > 0:
+                    dfa[state1][symbol] = state2
+                    if state2 not in states:
+                        queue.append(state2)
+                        states.append(state2)
+        final = [state for state in dfa if any(tok in self.final for tok in state.split('_'))]
+        transitions = [(state, symbol, dfa[state][symbol]) for state in dfa for symbol in symbols if symbol in dfa[state]]
+        return Automaton(start=self.start, final=final, transitions=transitions)
 
     def __str__(self):
         return "Automaton(start=" + str(self.start) + ", " + Diagram.__str__(self) + ", final=[" + ",".join(str(v) for v in self.final) + "])"

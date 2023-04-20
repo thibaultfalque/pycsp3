@@ -61,10 +61,10 @@ class Compilation:
 
 
 def _load_options():
-    options.set_values("data", "dataparser", "dataexport", "dataformat", "variant", "checker", "solver", "output")
+    options.set_values("data", "dataparser", "dataexport", "dataformat", "variant", "tocsp", "checker", "solver", "output", "suffix")
     options.set_flags("dataexport", "solve", "display", "verbose", "lzma", "sober", "ev", "safe", "recognizeSlides", "keepHybrid",
                       "keepSmartTransitions", "restrictTablesWrtDomains", "dontruncompactor", "dontcompactValues", "groupsumcoeffs",
-                      "usemeta", "debug", "mini", "uncurse")
+                      "usemeta", "dontuseauxcache", "debug", "mini", "uncurse")
     if options.checker is None:
         options.checker = "fast"
     assert options.checker in {"complete", "fast", "none"}
@@ -271,7 +271,8 @@ def _compile(disabling_opoverrider=False, verbose=1):
     if disabling_opoverrider:
         OpOverrider.disable()
 
-    if Compilation.filename is "" and options.output is not None:  # why the first part of the condition?
+    assert options.output is None or options.suffix is None
+    if Compilation.filename == "" and options.output is not None:  # why the first part of the condition?
         Compilation.set_path_file_name(options.output)
     if len(Compilation.filename) > 0:
         if Compilation.filename.endswith(".xml"):
@@ -282,7 +283,8 @@ def _compile(disabling_opoverrider=False, verbose=1):
         suffix = Compilation.string_data if not same_prefix else Compilation.string_data[1 + len(Compilation.string_model):]
         filename_prefix = Compilation.string_model + ("-" + options.variant if options.variant else "") + suffix
         fullname = Compilation.pathname + filename_prefix + ".xml"
-
+    if options.suffix:
+        fullname = fullname + options.suffix if not fullname.endswith(".xml") else fullname[:-4] + options.suffix + ".xml"
     stopwatch = Stopwatch()
     options.verbose and print("  PyCSP3 (Python:" + platform.python_version() + ", Path:" + os.path.abspath(__file__) + ")\n")
     build_similar_constraints()
@@ -299,7 +301,7 @@ def _compile(disabling_opoverrider=False, verbose=1):
         if options.display:
             print("\n", pretty_text)
         else:
-            with open(fullname, "w") as f:
+            with open(fullname, "w") as f:  # TODO: should we add encoding='utf-16'
                 f.write(pretty_text)
                 if verbose > 0:
                     print("  * Generating the file " + fullname + " completed in " + GREEN + Compilation.stopwatch.elapsed_time() + WHITE + " seconds.")

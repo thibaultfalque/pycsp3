@@ -109,7 +109,7 @@ class Constraint:
         args1, args2 = list(self.arguments.values()), list(other.arguments.values())
         if len(args1) != len(args2):
             return False
-        if any(args1[i].attributes != args2[i].attributes or args1[i].lifted != args2[i].lifted for i in range(len(args1))):
+        if any(args1[i].name != args2[i].name or args1[i].attributes != args2[i].attributes or args1[i].lifted != args2[i].lifted for i in range(len(args1))):
             return False
         return any(type(args1[i].content) == type(args2[i].content) for i in range(len(args1)))
 
@@ -128,9 +128,9 @@ class Constraint:
                 records.append((args1[i].name, b))
         if len(records) > 2:
             return False  # too many differences
-        diffs = Diffs(records)
         if len(records) == 0:
-            return diffs
+            return False  # or None
+        diffs = Diffs(records)
         if Diffs.fusion and not all(
                 name in Diffs.fusion.argument_names for name in diffs.argument_names):  # diffs.argument_names != Diffs.fusion.argument_names:
             return False  # because arguments are not the same (so it is not possible to make a unique abstraction)
@@ -147,7 +147,7 @@ class Constraint:
         items = list(self.arguments.items())
         condition = None  # items[-1][1].content.infix_string() if items[-1][0] == TypeCtrArg.CONDITION else None
         s_attributes = " ".join(str(t.name) + ": " + str(v) for (t, v) in self.attributes if t is not TypeCtrArg.TYPE)
-        s_arguments = ", ".join(str(v) for k, v in (items if condition is None else items[:-1]) if v.content is not None)
+        s_arguments = ", ".join(str(v) for k, v in (items if condition is None else items[:-1]) if v and v.content is not None)
         body = ("[" + s_attributes + "]" if len(s_attributes) > 0 else "") + "(" + s_arguments + ")"
         if len(self.attributes) > 0 and self.attributes[0][0] is TypeCtrArg.TYPE:  # objective
             s = str(self.name) + "(" + str(self.attributes[0][1]) + body + ")"
@@ -213,10 +213,11 @@ class ConstraintExtension(Constraint):
                             tpl = list(t[:j])
                         tpl.append(ConditionInterval(TypeConditionOperator.IN, v.start, v.stop - 1))
                     elif isinstance(v, (tuple, list, set, frozenset)):
-                        assert all(isinstance(w, int) for w in v)
+                        assert all(isinstance(w, (int, range)) for w in v)
                         if not tpl:
                             tpl = list(t[:j])
-                        tpl.append(ConditionSet(TypeConditionOperator.IN, set(v)))
+                        values = {u for w in v for u in ([w] if isinstance(w, int) else list(w))}
+                        tpl.append(ConditionSet(TypeConditionOperator.IN, values))  # set(v)))
                     else:
                         assert isinstance(v, Condition), "An element of this table should not be of type: " + str(type(v))
                         if tpl:
@@ -248,8 +249,8 @@ class ConstraintExtension(Constraint):
             h = hash(tuple(table) + (self.keep_hybrid,))  # if ever we change the value of keep_hybrid
         except TypeError:
             for i, t in enumerate(table):
-                if any(isinstance(v, set) for v in t):
-                    table[i] = tuple(tuple(v) if isinstance(v, set) else v for v in t)
+                if any(isinstance(v, (list, set, frozenset)) for v in t):
+                    table[i] = tuple(tuple(v) if isinstance(v, (list, set, frozenset)) else v for v in t)
             h = hash(tuple(table))
 
         if len(scope) == 1:  # if arity 1
@@ -332,7 +333,7 @@ class ConstraintExtension(Constraint):
             return False
         if TypeCtrArg.SUPPORTS in self.arguments and self.arguments[TypeCtrArg.SUPPORTS].content != other.arguments[TypeCtrArg.SUPPORTS].content:
             return False
-        elif TypeCtrArg.CONFLICTS in self.arguments and self.arguments[TypeCtrArg.CONFLICTS].content != other.arguments[TypeCtrArg.CONFLICTS].content:
+        if TypeCtrArg.CONFLICTS in self.arguments and self.arguments[TypeCtrArg.CONFLICTS].content != other.arguments[TypeCtrArg.CONFLICTS].content:
             return False
         return Diffs([(TypeCtrArg.LIST, False)])
 
@@ -433,6 +434,12 @@ class ConstraintPrecedence(Constraint):
             self.arg(TypeCtrArg.VALUES, values, attributes=[(TypeCtrArg.COVERED, "true")] if covered else [], content_ordered=True)
 
 
+# class ConstraintSubsetAllDifferent(ConstraintUnmergeable):
+#     def __init__(self, subsets):
+#         super().__init__(TypeCtr.SUBSET_ALL_DIFFERENT)
+#         self.arg(TypeCtrArg.SUBSETS, subsets, lifted=True)
+
+
 ''' Counting and Summing Constraints '''
 
 
@@ -518,6 +525,7 @@ class ConstraintCardinality(Constraint):
         super().__init__(TypeCtr.CARDINALITY)
         self.arg(TypeCtrArg.LIST, lst)
         assert len(values) == len(occurs)
+        #  values = integers_to_string(values)  TODO (and compact form for occurs)
         self.arg(TypeCtrArg.VALUES, values, content_ordered=True, attributes=[(TypeXML.CLOSED, "true")] if closed else [])
         self.arg(TypeCtrArg.OCCURS, occurs, content_ordered=True)
 
@@ -609,8 +617,9 @@ class ConstraintElement(ConstraintWithCondition):  # currently, not exactly with
             aux = auxiliary().replace_element_index(len(lst_flatten), index)
             if aux:  # this is the case if we need another variable to have a correct indexing
                 self.arg(TypeCtrArg.INDEX, aux, attributes=[(TypeCtrArg.RANK, type_rank)] if type_rank else [])
-                # below, should we replace ANY by a specific value (for avoid interchangeable values)?
-                functions.satisfy((index, aux) in {(v, v if 0 <= v < len(lst_flatten) else ANY) for v in index.dom}, no_comment_tags_extraction=True)
+                # below, should we replace ANY by a specific value (for avoiding interchangeable values)?
+                auxiliary().extension_for_element(index, aux, {(v, v if 0 <= v < len(lst_flatten) else ANY) for v in index.dom})
+                # functions.satisfy((index, aux) in {(v, v if 0 <= v < len(lst_flatten) else ANY) for v in index.dom}, no_comment_tags_extraction=True)
             else:
                 self.arg(TypeCtrArg.INDEX, index, attributes=[(TypeCtrArg.RANK, type_rank)] if type_rank else [])
         if condition:
@@ -912,6 +921,9 @@ class PartialConstraint:  # constraint whose condition has not been given such a
             obj2 = PartialConstraint(ConstraintSum([obj2], [1], None))
         elif isinstance(obj2, ScalarProduct):
             obj2 = PartialConstraint(ConstraintSum(obj2.variables, obj2.coeffs, None))
+        elif isinstance(obj2, int):
+            aux = auxiliary().replace_partial_constraint(obj1)
+            return aux + obj2 if operator is TypeNode.ADD else aux - obj2
         elif not isinstance(obj2, PartialConstraint):
             error("The type of the operand of the partial constraint is wrong as it is " + str(type(obj2)))
         obj1, obj2 = (obj1, obj2) if not inverted else (obj2, obj1)  # we invert back
@@ -998,6 +1010,7 @@ class _Auxiliary:
         self._introduced_variables = []
         self._collected_constraints = []
         self._collected_raw_constraints = []
+        self._collected_extension_for_element_constraints = []
         self.prefix = "aux_gb"
         self.cache = []
 
@@ -1020,13 +1033,27 @@ class _Auxiliary:
             self._collected_constraints.append((obj, var))
         return var
 
+    def n_introduced_variables(self):
+        return len(self._introduced_variables)
+
     def replace_partial_constraint(self, pc):
         assert isinstance(pc, PartialConstraint)
-        for c, x in self.cache:
-            if pc.constraint.equal_except_condition(c):
-                # if functions.protect().execute(pc.constraint.equal_except_condition(c)):
-                # if functions.protect().execute(pc.constraint == c):
-                return x
+        if not options.dontuseauxcache:
+            for c, x in self.cache:
+                if pc.constraint.equal_except_condition(c):
+                    # if functions.protect().execute(pc.constraint.equal_except_condition(c)):
+                    # if functions.protect().execute(pc.constraint == c):
+                    return x
+        else:  # partial use
+            if len(self.cache) > 0:
+                c, x = self.cache[0]
+                if pc.constraint.equal_except_condition(c):
+                    return x
+            if len(self.cache) > 1:
+                c, x = self.cache[-1]
+                if pc.constraint.equal_except_condition(c):
+                    return x
+
         if isinstance(pc.constraint, (ConstraintMinimum, ConstraintMaximum)):
             values = possible_range(pc.constraint.all_possible_values())
         else:
@@ -1044,6 +1071,10 @@ class _Auxiliary:
         cc.constraint.set_condition(TypeConditionOperator.EQ, aux)
         self._collected_raw_constraints.append(cc)
         return functions.expr(op, aux, k)
+
+    def replace_constant(self, cst):
+        assert isinstance(cst, int)
+        return self.__replace(cst, Domain({cst}), systematically_append_obj=False)
 
     def replace_node(self, node, *, values=None):
         assert isinstance(node, Node)
@@ -1076,10 +1107,10 @@ class _Auxiliary:
 
     def replace_int(self, v):
         assert isinstance(v, int)
-        # if v in _Auxiliary.cache_ints:  # for the moment, we do not use it
+        # if v in _Auxiliary.cache_ints:  # for the moment, we do not use it because it may cause some problems with some constraints (similar variables)
         #     return _Auxiliary.cache_ints[v]
         aux = self.__replace(None, Domain(v), systematically_append_obj=False)
-        _Auxiliary.cache_ints[v] = aux
+        # _Auxiliary.cache_ints[v] = aux
         return aux
 
     def replace_ints(self, lst):
@@ -1087,6 +1118,9 @@ class _Auxiliary:
 
     def normalize_list(self, lst):
         return curser.ListVar([v if isinstance(v, Variable) else self.replace_int(v) if isinstance(v, int) else self.replace_node(v) for v in lst])
+
+    def extension_for_element(self, index, aux, table):
+        self._collected_extension_for_element_constraints.append((index, aux, table))
 
     def collected(self):
         t = self._collected_constraints
@@ -1096,6 +1130,11 @@ class _Auxiliary:
     def raw_collected(self):
         t = self._collected_raw_constraints
         self._collected_raw_constraints = []
+        return t
+
+    def collected_extension_for_element(self):
+        t = self._collected_extension_for_element_constraints
+        self._collected_extension_for_element_constraints = []
         return t
 
 
@@ -1125,7 +1164,8 @@ def global_indirection(c):
         if aux:  # this is the case if we need another variable to have a correct indexing
             c.arguments[TypeCtrArg.INDEX].content = aux
             # below, should we replace ANY by a specific value (for avoid interchangeable values)?
-            functions.satisfy((index, aux) in {(v, v if 0 <= v < length else ANY) for v in index.dom})
+            auxiliary().extension_for_element(index, aux, {(v, v if 0 <= v < length else ANY) for v in index.dom})
+            # functions.satisfy((index, aux) in {(v, v if 0 <= v < length else ANY) for v in index.dom})
     if isinstance(c, ConstraintAllDifferent):
         lst = c.arguments[TypeCtrArg.LIST].content
         pc = PartialConstraint(ConstraintNValues(lst, c.arguments[TypeCtrArg.EXCEPT].content, None))

@@ -18,33 +18,79 @@ unsafe_cache = False  # see for example Pic since the table is released as it oc
 
 
 def cursing():
+    def _bool_or(self, other):
+        if not OpOverrider.activated:
+            return self.__or__(other)
+        if isinstance(self, bool):
+            return True if self is True else other
+        return self.__or__(other)
+
+    def _bool_and(self, other):
+        if not OpOverrider.activated:
+            return self.__and__(other)
+        if isinstance(self, bool):
+            return False if self is False else other
+        return self.__and__(other)
+
     def _int_add(self, other):
         if not OpOverrider.activated:
             return self.__add__(other)
         assert isinstance(self, int), "The expression with operator + is badly formed: " + str(self) + "+" + str(other)
-        if isinstance(other, (Node, PartialConstraint)):
-            if self == 0:
-                return other
-            if isinstance(other, Node):
-                return Node.build(TypeNode.ADD, self, other)
-            if isinstance(other, PartialConstraint):
-                return Node.build(TypeNode.ADD, self, auxiliary().replace_partial_constraint(other))
-            # other cases ???  PartialConstraint of type sum ??
+        if self == 0:
+            return other
+        if isinstance(other, ScalarProduct):
+            other = functions.Sum(other)  # to get a partial constraint
+        if isinstance(other, Node):
+            return Node.build(TypeNode.ADD, self, other)
+        if isinstance(other, PartialConstraint):
+            return Node.build(TypeNode.ADD, self, auxiliary().replace_partial_constraint(other))
+        # other cases ???  PartialConstraint of type sum ??
         return self.__add__(other)
 
     def _int_sub(self, other):
         if not OpOverrider.activated:
             return self.__sub__(other)
         assert isinstance(self, int), "The expression with operator + is badly formed: " + str(self) + "+" + str(other)
-        if isinstance(other, (Node, PartialConstraint)):
-            if self == 0:
-                return other
-            if isinstance(other, Node):
-                return Node.build(TypeNode.SUB, self, other)
-            if isinstance(other, PartialConstraint):
-                return Node.build(TypeNode.SUB, self, auxiliary().replace_partial_constraint(other))
-            # other cases ???  PartialConstraint of type sum ??
+        if self == 0:
+            return -other
+        if isinstance(other, ScalarProduct):
+            other = functions.Sum(other)  # to get a partial constraint
+        if isinstance(other, Node):
+            return Node.build(TypeNode.SUB, self, other)
+        if isinstance(other, PartialConstraint):
+            return Node.build(TypeNode.SUB, self, auxiliary().replace_partial_constraint(other))
+        # other cases ???  PartialConstraint of type sum ??
         return self.__sub__(other)
+
+    def _int_floordiv(self, other):
+        if not OpOverrider.activated:
+            return self.__floordiv__(other)
+        assert isinstance(self, int), "The expression with operator + is badly formed: " + str(self) + "+" + str(other)
+        if self == 0:
+            return 0
+        if isinstance(other, ScalarProduct):
+            other = functions.Sum(other)  # to get a partial constraint
+        if isinstance(other, (Variable, Node)):
+            return Node.build(TypeNode.DIV, self, other)
+        if isinstance(other, PartialConstraint):
+            return Node.build(TypeNode.DIV, self, auxiliary().replace_partial_constraint(other))
+        # other cases ???  PartialConstraint of type sum ??
+        return self.__floordiv__(other)
+
+    def _int_mod(self, other):
+        if not OpOverrider.activated:
+            return self.__mod__(other)
+        assert isinstance(self, int), "The expression with operator + is badly formed: " + str(self) + "+" + str(other)
+        if self == 0:
+            return 0
+        if isinstance(other, ScalarProduct):
+            other = functions.Sum(other)  # to get a partial constraint
+        if isinstance(other, (Variable, Node)):
+            return Node.build(TypeNode.MOD, self, other)
+        if isinstance(other, PartialConstraint):
+            return Node.build(TypeNode.MOD, self, auxiliary().replace_partial_constraint(other))
+        # other cases ???  PartialConstraint of type sum ??
+        return self.__mod__(other)
 
     def _dict_add(self, other):  # for being able to merge dictionaries (to be removed when python 3.9 will be widely adopted)
         if isinstance(other, dict):
@@ -191,8 +237,12 @@ def cursing():
                 return True
         return self.__contains__(other)
 
+    curse(bool, "__or__", _bool_or)
+    curse(bool, "__and__", _bool_and)
     curse(int, "__add__", _int_add)
     curse(int, "__sub__", _int_sub)
+    curse(int, "__floordiv__", _int_floordiv)
+    curse(int, "__mod__", _int_mod)
     curse(dict, "__add__", _dict_add)
     curse(tuple, "__mul__", _tuple_mul)
     # curse(list, "__getitem__", _list_getitem) # TODO: not working. why? because of forbiddenfruit?
@@ -241,6 +291,7 @@ class OpOverrider:
         ECtr.__or__ = EMetaCtr.__or__ = Variable.__or__ = Node.__or__ = OpOverrider.__or__
         ECtr.__invert__ = Node.__invert__ = OpOverrider.__invert__  # we keep __invert__ for Variable
         ECtr.__xor__ = EMetaCtr.__xor__ = Variable.__xor__ = Node.__xor__ = OpOverrider.__xor__
+        Variable.__rshift__ = Node.__rshift__ = OpOverrider.__rshift__  # TODO ECtr and EMetaCtr too?
 
     @staticmethod
     def disable():
@@ -276,6 +327,7 @@ class OpOverrider:
         ECtr.__or__ = EMetaCtr.__or__ = Variable.__or__ = Node.__or__ = None
         ECtr.__invert__ = Node.__invert__ = None  # we keep __invert__ for Variable
         ECtr.__xor__ = EMetaCtr.__xor__ = Variable.__xor__ = Node.__xor__ = None
+        Variable.__rshift__ = Node.__rshift__ = None
 
         return OpOverrider
 
@@ -320,6 +372,8 @@ class OpOverrider:
         return self.sons[0] if isinstance(self, Node) and self.type == TypeNode.NEG else Node.build(TypeNode.NEG, self)
 
     def __add__(self, other):
+        if isinstance(other, int) and other == 0:
+            return self
         if isinstance(other, ScalarProduct):
             other = PartialConstraint(ConstraintSum(other.variables, other.coeffs, None))
         if isinstance(other, PartialConstraint):
@@ -338,6 +392,8 @@ class OpOverrider:
         return Node.build(TypeNode.ADD, other, self)
 
     def __sub__(self, other):
+        if isinstance(other, int) and other == 0:
+            return self
         if isinstance(other, ScalarProduct):
             other = PartialConstraint(ConstraintSum(other.variables, other.coeffs, None))
         if isinstance(other, PartialConstraint):
@@ -382,14 +438,28 @@ class OpOverrider:
     def __rfloordiv__(self, other):
         return Node.build(TypeNode.DIV, other, self)
 
+    @staticmethod
+    def _replace(arg1, arg2):
+        if isinstance(arg1, PartialConstraint) and isinstance(arg2, Node):
+            return auxiliary().replace_partial_constraint(arg1), arg2
+        if isinstance(arg2, PartialConstraint) and isinstance(arg1, Node):
+            return arg1, auxiliary().replace_partial_constraint(arg2)
+        return arg1, arg2
+
     def __lt__(self, other):
         if self is None or other is None:
             return object.__lt__(self, other)
+        if isinstance(other, int) and other == 1 and isinstance(self, Node) and self.type == TypeNode.DIST:  # we simplify the expression
+            return Node.build(TypeNode.EQ, self.sons[0], self.sons[1])
+        self, other = OpOverrider._replace(self, other)
         return other.__gt__(self) if isinstance(other, (PartialConstraint, ScalarProduct)) else Node.build(TypeNode.LT, self, other)
 
     def __le__(self, other):
         if self is None or other is None:
             return object.__le__(self, other)
+        if isinstance(other, int) and other == 0 and isinstance(self, Node) and self.type == TypeNode.DIST:  # we simplify the expression
+            return Node.build(TypeNode.EQ, self.sons[0], self.sons[1])
+        self, other = OpOverrider._replace(self, other)
         return other.__ge__(self) if isinstance(other, (PartialConstraint, ScalarProduct)) else Node.build(TypeNode.LE, self, other)
 
     def __ge__(self, other):
@@ -397,6 +467,7 @@ class OpOverrider:
             return object.__ge__(self, other)
         if isinstance(other, int) and other == 1 and isinstance(self, Node) and self.type == TypeNode.DIST:  # we simplify the expression
             return Node.build(TypeNode.NE, self.sons[0], self.sons[1])
+        self, other = OpOverrider._replace(self, other)
         return other.__le__(self) if isinstance(other, (PartialConstraint, ScalarProduct)) else Node.build(TypeNode.GE, self, other)
 
     def __gt__(self, other):
@@ -404,6 +475,7 @@ class OpOverrider:
             return object.__gt__(self, other)
         if isinstance(other, int) and other == 0 and isinstance(self, Node) and self.type == TypeNode.DIST:  # we simplify the expression
             return Node.build(TypeNode.NE, self.sons[0], self.sons[1])
+        self, other = OpOverrider._replace(self, other)
         return other.__lt__(self) if isinstance(other, (PartialConstraint, ScalarProduct)) else Node.build(TypeNode.GT, self, other)
 
     def __eq__(self, other):
@@ -417,6 +489,7 @@ class OpOverrider:
             other = other[0] if len(other) == 1 else functions.conjunction(other)
         if isinstance(other, int) and other == 0 and isinstance(self, Node) and self.type == TypeNode.DIST:  # we simplify the expression
             return Node.build(TypeNode.EQ, self.sons[0], self.sons[1])
+        self, other = OpOverrider._replace(self, other)
         return other.__eq__(self) if isinstance(other, (PartialConstraint, ScalarProduct)) else Node.build(TypeNode.EQ, self, other)
 
     def __ne__(self, other):
@@ -430,11 +503,16 @@ class OpOverrider:
             other = other[0] if len(other) == 1 else functions.conjunction(other)
         if isinstance(other, int) and other == 0 and isinstance(self, Node) and self.type == TypeNode.DIST:  # we simplify the expression
             return Node.build(TypeNode.NE, self.sons[0], self.sons[1])
+        self, other = OpOverrider._replace(self, other)
         return other.__ne__(self) if isinstance(other, (PartialConstraint, ScalarProduct)) else Node.build(TypeNode.NE, self, other)
 
     def __or__(self, other):
-        # if isinstance(other, bool):
-        #     return self if other is False else True
+        if isinstance(other, bool) and len(queue_in) == 0:
+            # TODO how to extend it (without second condition part) ? should we use an option -dontcombinebool (pb with JapanEncoding)
+            return self if other is False else True
+        if isinstance(other, PartialConstraint):
+            other = auxiliary().replace_partial_constraint(other)
+            assert 0 <= other.dom.smallest_value() and other.dom.greatest_value() <= 1
         res = manage_global_indirection(self, other)
         if res is None:
             return functions.Or(self, other)
@@ -443,11 +521,19 @@ class OpOverrider:
             return object.__or__(self, other)
         if isinstance(other, (tuple, list)):
             other = other[0] if len(other) == 1 else functions.conjunction(other)
+        if isinstance(other, (tuple, list)):
+            return Node.disjunction(self, *other)
         return Node.disjunction(self, other)
 
     def __and__(self, other):
-        # if isinstance(other, bool):
+        if isinstance(other, bool) and len(queue_in) == 0:
+            # TODO how to extend it (without second condition part) ? should we use an option -dontcombinebool (pb with JapanEncoding)
+            return self if other is True else False
+        # if isinstance(other, bool):  # TODO should we keep it? or use an option -dontcombinebool
         #     return self if other is True else False
+        if isinstance(other, PartialConstraint):
+            other = auxiliary().replace_partial_constraint(other)
+            assert 0 <= other.dom.smallest_value() and other.dom.greatest_value() <= 1
         res = manage_global_indirection(self, other)
         if res is None:
             return functions.And(self, other)
@@ -457,6 +543,10 @@ class OpOverrider:
         return Node.conjunction(self, other)
 
     def __invert__(self):
+        if isinstance(self, PartialConstraint):
+            x = auxiliary().replace_partial_constraint(self)
+            assert 0 <= x.dom.smallest_value() and x.dom.greatest_value() <= 1
+            self = x
         if isinstance(self, ECtr):
             gi = global_indirection(self.constraint)
             if gi is None:
@@ -465,6 +555,9 @@ class OpOverrider:
         return Variable.__invert__(self) if isinstance(self, VariableInteger) else Node.build(TypeNode.NOT, self)
 
     def __xor__(self, other):
+        if isinstance(other, PartialConstraint):
+            other = auxiliary().replace_partial_constraint(other)
+            assert 0 <= other.dom.smallest_value() and other.dom.greatest_value() <= 1
         res = manage_global_indirection(self, other)
         if res is None:
             return functions.Xor(self, other)
@@ -474,6 +567,9 @@ class OpOverrider:
         if isinstance(other, (tuple, list)):
             other = other[0] if len(other) == 1 else functions.conjunction(other)
         return Node.build(TypeNode.XOR, self, other)
+
+    def __rshift__(self, other):
+        return functions.imply(self, other)
 
     @staticmethod
     def __extract_vars_vals(self, other):
@@ -530,7 +626,7 @@ class OpOverrider:
 
     @staticmethod
     def __getitem__shared_by_lv_and_li(array, indexes, *, lv):  # lv=True for ListVar, lv=False for ListInt
-        if isinstance(indexes, list):
+        if isinstance(indexes, (list, range)):
             indexes = tuple(indexes)
         if isinstance(indexes, tuple) and len(indexes) == 1:
             indexes = indexes[0]
@@ -560,7 +656,7 @@ class OpOverrider:
         if isinstance(indexes, tuple):
             assert len(indexes) > 1
             if any(isinstance(i, (Variable, Node, PartialConstraint, ECtr)) for i in indexes):  # this must be a constraint Element or Element-Matrix
-                assert is_matrix(array) and len(indexes) == 2, "A matrix is expected, with two indexes"
+                assert is_matrix(array) and len(indexes) == 2, "A matrix is expected, with two indexes" + str(array) + " " + str(indexes)
                 n, m = len(array), max(len(row) for row in array)
                 index0 = auxiliary().replace_partial_constraint_and_constraint_with_condition_and_possibly_node(indexes[0], node_too=True, values=range(n))
                 index1 = auxiliary().replace_partial_constraint_and_constraint_with_condition_and_possibly_node(indexes[1], node_too=True, values=range(m))
@@ -602,6 +698,9 @@ class ListInt(list):
         return ListInt(super().__add__(other))
 
     def __mul__(self, other):
+        if is_1d_list(self, int) and is_1d_list(other, int):
+            assert len(self) == len(other)
+            return sum(self[i] * other[i] for i in range(len(self)))
         if is_matrix(self):
             assert is_matrix(other) and len(self) == len(other) and len(self[0]) == len(other[0])
             t1, t2 = zip(
@@ -609,6 +708,11 @@ class ListInt(list):
             assert is_containing(t2, (Variable, Node))
             return ScalarProduct(list(t2), list(t1))
         if is_containing(flatten(other), (Variable, Node)):
+            if len(self) == 1:
+                if isinstance(other, Variable):
+                    return self[0] * other
+                if isinstance(other, (tuple, list)) and len(other) == 1:
+                    return self[0] * other[0]
             return ScalarProduct(other, self)
         assert is_containing(self, (Variable, Node))
         return ScalarProduct(self, other)
@@ -666,18 +770,23 @@ class ListVar(list):
 
     # def __rmul__(self, other): return ListVar.__mul__(other, self)
 
-    def around(self, i, j, with_center=False):
-        assert is_matrix(self), "calling around should be made on a 2-dimensional array"
+    def around(self, i, j):
+        assert is_matrix(self), "calling this function should be made on a 2-dimensional array"
         n, m = len(self), len(self[i])
         assert 0 <= i < n and 0 <= j < m
-        t = [self[i][j]] if with_center else []
-        return ListVar(t + [self[i + k][j + l] for k in [-1, 0, 1] for l in [-1, 0, 1] if 0 <= i + k < n and 0 <= j + l < m and (k, l) != (0, 0)])
+        return ListVar([self[i + k][j + l] for k in [-1, 0, 1] for l in [-1, 0, 1] if 0 <= i + k < n and 0 <= j + l < m and (k, l) != (0, 0)])
 
-    def cross(self, i, j, with_center=True):
-        assert is_matrix(self), "calling cross should be made on a 2-dimensional array"
+    def beside(self, i, j):
+        assert is_matrix(self), "calling this function should be made on a 2-dimensional array"
         n, m = len(self), len(self[i])
         assert 0 <= i < n and 0 <= j < m
-        t = [self[i][j]] if with_center else []
+        return ListVar([self[k][l] for k, l in [(i, j - 1), (i, j + 1), (i - 1, j), (i + 1, j)] if 0 <= k < n and 0 <= l < m])
+
+    def cross(self, i, j, without_center=False):
+        assert is_matrix(self), "calling this function should be made on a 2-dimensional array"
+        n, m = len(self), len(self[i])
+        assert 0 <= i < n and 0 <= j < m
+        t = [self[i][j]] if without_center is False else []
         return ListVar(t + [self[k][l] for k, l in [(i, j - 1), (i, j + 1), (i - 1, j), (i + 1, j)] if 0 <= k < n and 0 <= l < m])
 
     def __str__(self):
@@ -885,15 +994,18 @@ def cp_array(*l):
     """
     if len(l) == 1:
         l = l[0]
-    if isinstance(l, (tuple, set, frozenset, types.GeneratorType)):
+    if isinstance(l, (tuple, set, frozenset, zip, types.GeneratorType)):
         l = list(l)
     assert isinstance(l, list)
     if len(l) == 0:
         return l
-    if isinstance(l[0], (list, types.GeneratorType)):
-        assert all(isinstance(t, (list, types.GeneratorType)) for t in l)
+    if isinstance(l[0], (tuple, list, types.GeneratorType)):
+        assert all(isinstance(t, (tuple, list, types.GeneratorType)) for t in l)
         res = [cp_array(t) for t in l]
-        return ListInt(res) if isinstance(res[0], ListInt) else ListVar(res)
+        if all(len(t) == 0 or isinstance(t, ListInt) for t in res):
+            return ListInt(res)
+        assert all(len(t) == 0 or isinstance(t, ListVar) for t in res)
+        return ListVar(res)
     typ = unique_type_in(l)
     if typ is int:
         return ListInt(l)

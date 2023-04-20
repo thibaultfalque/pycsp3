@@ -59,85 +59,6 @@ def different_values(*args):
     return all(a != b for (a, b) in combinations(args, 2))
 
 
-def symmetric_cells(n, m, i=None, j=None, sym=None):
-    """
-    When i, j are specified (not None), returns the indexes of cells that are symmetric to cell (i,j) whose index is i*n + j.
-    Other uses are possible (check them).
-
-    :param n: the number of rows
-    :param m: the number of columns
-    :param i: the index of the row (possibly, None)
-    :param j: the index of the column (possibly, None)
-    :param sym: the symmetry (possibly, None)
-    :return: indexes of symmetric cells
-    """
-    assert (i is None) == (j is None)
-    if n == m:
-        def sqr_index(i, j, k):
-            if k == TypeSquareSymmetry.R0:
-                return i * n + j
-            if k == TypeSquareSymmetry.R90:
-                return j * n + (n - 1 - i)
-            if k == TypeSquareSymmetry.R180:
-                return (n - 1 - i) * n + (n - 1 - j)
-            if k == TypeSquareSymmetry.R270:
-                return (n - 1 - j) * n + i
-            if k == k == TypeSquareSymmetry.FX:  # x flip
-                return (n - 1 - i) * n + j
-            if k == TypeSquareSymmetry.FY:  # y flip
-                return i * n + (n - 1 - j)
-            if k == TypeSquareSymmetry.FD1:  # d1 flip
-                return j * n + i
-            return (n - 1 - j) * n + (n - 1 - i)  # d2 flip
-
-        if i is not None:  # and so j is not None
-            return [sqr_index(i, j, k) for k in TypeSquareSymmetry] if sym is None else sqr_index(i, j, sym)
-        if sym is None:
-            return [[sqr_index(i, j, k) for i in range(n) for j in range(m)] for k in TypeSquareSymmetry]
-        return [sqr_index(i, j, sym) for i in range(n) for j in range(m)]
-
-    else:
-        def rect_index(i, j, k):
-            if k == TypeRectangleSymmetry.R0:
-                return i * m + j
-            if k == TypeSquareSymmetry.R180:  # not present in Minizinc models
-                return (n - 1 - i) * m + (m - 1 - j)
-            if k == TypeRectangleSymmetry.FX:  # x flip
-                return (n - 1 - i) * m + j
-            return i * m + (m - 1 - j)  # y flip
-
-        if i is not None:
-            return [rect_index(i, j, k) for k in TypeRectangleSymmetry] if sym is not None else rect_index(i, j, sym)
-        if sym is None:
-            return [[rect_index(i, j, k) for i in range(n) for j in range(m)] for k in TypeRectangleSymmetry]
-        return [rect_index(i, j, sym) for i in range(n) for j in range(m)]
-
-
-def symmetries_of_pattern(pattern):
-    """
-    Returns all symmetric patterns of the specified one (can be useful for computing symmetric variants of polyominoes)
-
-    :param pattern: a pattern given as a set of relative coordinates
-    :return: all symmetric patterns of the specified one
-    """
-
-    def _normalize(p):
-        minx, miny = min(i for i, _ in p), min(j for _, j in p)
-        return tuple((i - minx, j - miny) for i, j in p) if minx != 0 or miny != 0 else tuple(p)
-
-    pattern = _normalize(pattern)
-    # computing the size of the square (so as to be able to produce symmetric patterns)
-    n = max(max(i, j) for i, j in pattern) + 1  # +1 because starting at 0
-    s1 = [tuple(sorted(list(symmetric_cells(n, n, i, j, k) for i, j in pattern))) for k in TypeSquareSymmetry]
-    s2 = {_normalize([(v // n, v % n) for v in t]) for t in s1}
-    s3 = []
-    for t in s2:
-        assert min(i for i, _ in t) == 0
-        gap = min(j for i, j in t if i == 0)
-        s3.append(tuple((i, j - gap) for i, j in t))
-    return s3  # [tuple(i * n + j for i, j in t) for t in s3]
-
-
 def flatten(*args, keep_none=False):
     """
     Returns a list with all elements that can be encountered when looking into the specified arguments.
@@ -234,7 +155,7 @@ def is_cube(c, types=None):
 
 def alphabet_positions(s):
     '''
-    Returns a list with the indexes of the letters (with respect to the 26 letters of the Latin alphabet) of the specified string.
+    Returns a tuple with the indexes of the letters (with respect to the 26 letters of the Latin alphabet) of the specified string.
 
     @param s: a string
     '''
@@ -285,6 +206,8 @@ def integer_scaling(values):
 
 
 def decrement(t):
+    if isinstance(t, int):
+        return t-1
     if isinstance(t, types.GeneratorType):
         t = list(t)
     assert isinstance(t, list)
@@ -308,7 +231,7 @@ def table_to_string(table, restricting_domains=None, *, parallel=False):
     def _tuple_to_string(t):
         return "(" + ",".join(
             str(v) if isinstance(v, int) else
-            ("{" + ",".join(str(w) for w in sorted(v)) + "}") if isinstance(v, tuple) else
+            ("{" + ",".join(str(w) for w in sorted(v)) + "}") if isinstance(v, (tuple,list,set,frozenset)) else
             conditions.inside(v).str_tuple() if isinstance(v, range) else
             v if isinstance(v, str) else
             "*" if v == ANY else v.str_tuple()
@@ -464,7 +387,7 @@ def display_constraints(ctr_entities, separator=""):
 
 
 def structured_list(m, level=1):
-    if m is None or len(m) == 0:
+    if m is None or isinstance(m, (list, tuple)) and len(m) == 0:
         return "[]"
     if not isinstance(m, (list, tuple)):
         return str(m)
@@ -513,3 +436,76 @@ def error(s):
 def error_if(test, s):
     if test:
         error(s)
+
+
+polyominoes = [
+    {},  # dummy entry
+    {  # Monomino
+        "p1": [(0, 0)]
+    },
+    {  # Domino
+        "p2": [(0, 0), (1, 0)]
+    },
+    {  # Trominoes
+        "Bar": [(0, 0), (1, 0), (2, 0)],
+        "Right": [(0, 0), (1, 0), (1, 1)]
+    },
+    {  # Tetrominoes
+        "Square": [(0, 0), (0, 1), (1, 0), (1, 1)],
+        "T": [(0, 0), (0, 1), (0, 2), (1, 1)],
+        "Skew": [(0, 0), (0, 1), (1, 1), (1, 2)],
+        "L": [(0, 0), (0, 1), (0, 2), (-1, 2)],
+        "Bar": [(0, 0), (0, 1), (0, 2), (0, 3)]
+    },
+    {  # Pentominoes
+        "F": [(0, 0), (0, 1), (1, -1), (1, 0), (2, 0)],
+        "I": [(0, 0), (1, 0), (2, 0), (3, 0), (4, 0)],
+        "L": [(0, 0), (1, 0), (2, 0), (3, 0), (3, 1)],
+        "N": [(0, 0), (1, -1), (1, 0), (2, -1), (3, -1)],
+        "P": [(0, 0), (1, -1), (1, 0), (2, -1), (2, 0)],
+        "T": [(0, 0), (0, 1), (0, 2), (1, 1), (2, 1)],
+        "U": [(0, 0), (1, 0), (1, 1), (1, 2), (0, 2)],
+        "V": [(0, 0), (1, 0), (2, 0), (2, 1), (2, 2)],
+        "W": [(0, 0), (1, 0), (1, 1), (2, 1), (2, 2)],
+        "X": [(0, 0), (1, -1), (1, 0), (1, 1), (2, 0)],
+        "Y": [(0, 0), (1, -1), (1, 0), (2, 0), (3, 0)],
+        "Z": [(0, 0), (0, 1), (1, 1), (2, 1), (2, 2)]
+    },
+    {  # Hexominoes
+        "A": [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (2, 0)],
+        "C": [(0, 0), (0, 1), (1, 0), (2, 0), (3, 0), (3, 1)],
+        "D": [(0, 0), (0, 1), (0, 2), (0, 3), (1, 1), (1, 2)],
+        "E": [(0, 0), (0, 2), (1, 0), (1, 1), (1, 2), (2, 1)],
+        "highF": [(0, 0), (0, 1), (0, 2), (0, 3), (-1, 3), (1, 2)],
+        "LowF": [(0, 0), (1, 0), (1, 1), (1, 2), (1, 3), (2, 2)],
+        "G": [(0, 0), (0, 2), (0, 3), (1, 0), (1, 1), (1, 2)],
+        "H": [(0, 0), (0, 1), (0, 2), (1, 1), (2, 0), (2, 1)],
+        "I": [(0, 0), (0, 1), (0, 2), (0, 3), (0, 4), (0, 5)],
+        "J": [(0, 0), (0, 1), (0, 2), (1, 0), (2, 0), (2, 1)],
+        "K": [(0, 0), (0, 1), (1, 0), (1, 1), (1, 2), (2, 1)],
+        "L": [(0, 0), (0, 1), (1, 0), (2, 0), (3, 0), (4, 0)],
+        "M": [(0, 0), (0, 1), (0, 2), (-1, 2), (-1, 3), (1, 0)],
+        "longN": [(0, 0), (0, 1), (0, 2), (0, 3), (-1, 3), (-1, 4)],
+        "shortN": [(0, 0), (0, 1), (0, 2), (-1, 1), (-1, 2), (-1, 3)],
+        "O": [(0, 0), (0, 1), (0, 2), (1, 0), (1, 1), (1, 2)],
+        "P": [(0, 0), (0, 1), (0, 2), (0, 3), (1, 2), (1, 3)],
+        "Q": [(0, 0), (1, 0), (1, 1), (1, 2), (2, 1), (2, 2)],
+        "R": [(0, 0), (1, 0), (1, 1), (1, 2), (2, 0), (2, 1)],
+        "S": [(0, 0), (0, 1), (0, 2), (-1, 2), (-1, 3), (-1, 4)],
+        "tallT": [(0, 0), (0, 1), (0, 2), (1, 1), (2, 1), (3, 1)],
+        "shortT": [(0, 0), (0, 1), (0, 2), (0, 3), (1, 2), (2, 2)],
+        "U": [(0, 0), (0, 1), (0, 2), (0, 3), (1, 0), (1, 2)],
+        "V": [(0, 0), (0, 1), (0, 2), (1, 0), (2, 0), (3, 0)],
+        "Wa": [(0, 0), (0, 1), (0, 2), (-1, 2), (-1, 3), (-2, 3)],
+        "Wb": [(0, 0), (0, 1), (-1, 1), (-1, 2), (-2, 2), (-2, 3)],
+        "Wc": [(0, 0), (0, 1), (1, 1), (1, 2), (1, 3), (2, 2)],
+        "X": [(0, 0), (0, 1), (0, 2), (0, 3), (-1, 2), (1, 2)],
+        "italicX": [(0, 0), (0, 1), (0, 2), (0, 3), (-1, 1), (1, 2)],
+        "highY": [(0, 0), (0, 1), (0, 2), (0, 3), (0, 4), (1, 3)],
+        "lowY": [(0, 0), (0, 1), (0, 2), (0, 3), (0, 4), (1, 2)],
+        "tallZ": [(0, 0), (0, 1), (1, 0), (2, 0), (3, -1), (3, 0)],
+        "shortZ": [(0, 0), (0, 1), (1, 0), (2, -2), (2, -1), (2, 0)],
+        "high4": [(0, 0), (1, 0), (1, 1), (1, 2), (2, 1), (3, 1)],
+        "low4": [(0, 0), (1, 0), (2, 0), (2, 1), (2, 2), (3, 1)]
+    }
+]
