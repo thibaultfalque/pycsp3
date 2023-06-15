@@ -16,7 +16,7 @@ from pycsp3.classes.main.constraints import (
     ConstraintAllDifferentList, ConstraintAllDifferentMatrix, ConstraintAllEqual, ConstraintAllEqualList, ConstraintOrdered, ConstraintLex, ConstraintLexMatrix,
     ConstraintPrecedence, ConstraintSum, ConstraintCount, ConstraintNValues, ConstraintCardinality, ConstraintMaximum,
     ConstraintMinimum, ConstraintMaximumArg, ConstraintMinimumArg, ConstraintElement, ConstraintChannel, ConstraintNoOverlap, ConstraintCumulative,
-    ConstraintBinPacking, ConstraintKnapsack, ConstraintFlow, ConstraintCircuit, ConstraintClause, PartialConstraint, ScalarProduct, auxiliary,
+    ConstraintBinPacking, ConstraintKnapsack, ConstraintFlow, ConstraintCircuit, ConstraintClause, ConstraintSlide, PartialConstraint, ScalarProduct, auxiliary,
     manage_global_indirection)
 from pycsp3.classes.main.domains import Domain
 from pycsp3.classes.main.objectives import ObjectiveExpression, ObjectivePartial
@@ -199,7 +199,6 @@ def VarArray(doms=None, *, size=None, dom=None, id=None, comment=None):
         domain = flatten(dom)
         assert all(isinstance(v, int) for v in domain) or all(isinstance(v, str) for v in domain)
         dom = Domain(set(domain))
-
     var_objects = Variable.build_variables_array(array_name, size, dom)
 
     if isinstance(array_name, list):
@@ -276,9 +275,14 @@ def _bool_interpretation_for_in(left_operand, right_operand, bool_value):
     else:  # It is a table constraint
         if not hasattr(left_operand, '__iter__'):
             left_operand = [left_operand]
+        assert isinstance(right_operand, list)
         if not bool_value and len(right_operand) == 0:
             return None
         # TODO what to do if the table is empty and bool_value is true? an error message ?
+        if len(left_operand) == 1:
+            if not is_1d_list(right_operand, int) and not is_1d_list(right_operand, str):
+                assert all(isinstance(v, (tuple, list)) and len(v) == 1 for v in right_operand)
+                right_operand = [v[0] for v in right_operand]
         ctr = _Extension(scope=flatten(left_operand), table=right_operand, positive=bool_value)  # TODO ok for using flatten? (before it was list())
     return ctr
 
@@ -379,7 +383,7 @@ def Iff(*args):
     return EIff(_wrap_intension_constraints(_complete_partial_forms_of_constraints(flatten(*args))))
 
 
-def Slide(*args):
+def Slide(*args, expression=None, circular=None, offset=None, collect=None):
     """
     Builds a meta-constraint Slide from the specified arguments.
     Slide((x[i], x[i + 1]) in table for i in range(n - 1))
@@ -390,8 +394,10 @@ def Slide(*args):
     :param args: a tuple of constraints
     :return: a meta-constraint Slide
     """
-    entities = _wrap_intension_constraints(
-        flatten(*args))  # we cannot directly complete partial forms (because it is executed before the analysis of the parameters of satisfy
+    if expression is not None:  # the meta-constraint is defined directly by the user
+        return ECtr(ConstraintSlide(*args, expression, circular, offset, collect))
+    # we cannot directly complete partial forms (because it is executed before the analysis of the parameters of satisfy
+    entities = _wrap_intension_constraints(flatten(*args))
     checkType(entities, [ECtr, bool])
     return ESlide([EToGather(entities)])
 
@@ -1031,6 +1037,8 @@ def Sum(term, *others, condition=None):
         return terms, coeffs
 
     terms = flatten(list(term)) if isinstance(term, types.GeneratorType) else flatten(term, others)
+    if any(v is None or (isinstance(v, int) and v == 0) for v in terms):
+        terms = [v for v in terms if v is not None and not (isinstance(v, int) and v == 0)]
     checkType(terms, ([Variable], [Node], [Variable, Node], [PartialConstraint], [ScalarProduct], [ECtr]))
     if len(terms) == 0:
         return 0  # None
@@ -1090,7 +1098,7 @@ def Count(term, *others, value=None, values=None, condition=None):
     for i, t in enumerate(terms):
         if isinstance(t, PartialConstraint):
             terms[i] = auxiliary().replace_partial_constraint(t)
-    checkType(terms, ([Variable], [Node]))
+    checkType(terms, ([Variable], [Node], [Variable, Node]))
     if value is None and values is None:
         value = 1
     assert value is None or values is None, str(value) + " " + str(values)
@@ -1343,9 +1351,12 @@ def NoOverlap(tasks=None, *, origins=None, lengths=None, zero_ignored=False):
     :param zero_ignored: if True, the tasks with length 0 must be discarded
     :return: a constraint NoOverlap
     """
-    if tasks:
+    if tasks is not None:
         assert origins is None and lengths is None
         tasks = list(tasks) if isinstance(tasks, (tuple, set, frozenset, types.GeneratorType)) else tasks
+        if len(tasks) <= 1:
+            warning("A constraint NoOverlap discarded because defined with " + str(len(tasks)) + " task")
+            return None
         assert isinstance(tasks, list) and len(tasks) > 0
         assert any(isinstance(task, (tuple, list)) and len(task) == 2 for task in tasks)
         origins, lengths = zip(*tasks)
@@ -1417,6 +1428,14 @@ def Cumulative(tasks=None, *, origins=None, lengths=None, ends=None, heights=Non
     if tasks is not None:
         assert origins is None and lengths is None and ends is None and heights is None
         tasks = list(tasks) if isinstance(tasks, (tuple, set, frozenset, types.GeneratorType)) else tasks
+        if len(tasks) == 0:
+            warning("A constraint Cumulative transformed because defined with 0 task")
+            return auxiliary().replace_int(0)
+        if len(tasks) == 1:
+            warning("A constraint Cumulative transformed because defined with 1 task only")
+            h = tasks[0][2 if len(tasks[0]) == 3 else 3]  # the height fo the task
+            return h if isinstance(h, Variable) else auxiliary().replace_int(h)
+
         assert len(tasks) > 0, "a cumulative constraint without no tasks"
         assert isinstance(tasks, list) and len(tasks) > 0
         v = len(tasks[0])

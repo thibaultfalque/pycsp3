@@ -6,11 +6,12 @@ from pycsp3.classes.auxiliary.ptypes import TypeFramework, TypeConditionOperator
 from pycsp3.classes.entities import (Entity, EVar, EVarArray, ECtr, EMetaCtr, EObjective, EAnnotation, EGroup, EBlock, ESlide, EIfThenElse, EToGather,
                                      EToSatisfy, CtrEntities, VarEntities, ObjEntities, AnnEntities)
 from pycsp3.classes.main.constraints import ConstraintIntension
+from pycsp3.classes.main.annotations import TypeAnnArg
 from pycsp3.dashboard import options
 from pycsp3.tools.compactor import compact
 from pycsp3.tools.slider import _identify_slide
 from pycsp3.classes.auxiliary.conditions import Condition
-from pycsp3.tools.utilities import warning
+from pycsp3.tools.utilities import warning, table_to_string
 
 SIZE_LIMIT_FOR_USING_AS = 12  # when building domains of variables of arrays of variables (and using the attribute 'as')
 
@@ -98,13 +99,25 @@ def _variables():
 
 def _argument(elt, arg, key, value, change_element_value=False):
     assert value is not None
+    if key == TypeAnnArg.STATICS:
+        for k, v in value:
+            elt.append(_element(TypeAnnArg.STATIC, attributes=[(TypeAnnArg.ORDER, " ".join(str(ele) for ele in v))], text=compact(k)))
+        return
     if key == TypeCtrArg.LIMIT:  # we modify the name of the argument for constraint knapsack
         key = TypeCtrArg.CONDITION
-    if arg.lifted is True:  # TODO do we have an example? (3-tuples for attributes in this case?)
+    if key == TypeCtrArg.INTENTION and isinstance(value, (list, tuple, set, frozenset)):
+        value = list(value)
+        subelt = _element(TypeCtr.EXTENSION)
+        subelt.append(_element(TypeCtrArg.LIST, text=" ".join("%" + str(i) for i in range(len(value[0])))))
+        subelt.append(_element(TypeCtrArg.SUPPORTS, text=table_to_string(value)))
+        elt.append(subelt)
+    elif arg.lifted is True:
         for i, l in enumerate(value):
-            subelt = _element(key, text=l)
-            for att in (att for att in arg.attributes if att[1] == key and att[0] == i):
-                subelt.set(str(att[2]), str(att[3]))
+            no_attributes = arg.attributes is None or len(arg.attributes) == 0
+            assert no_attributes or len(arg.attributes) == len(value)
+            subelt = _element(key, text=l, attributes=[] if no_attributes else arg.attributes[i])
+            # for att in arg.attributes[i]:  #(att for att in arg.attributes if att[1] == key and att[0] == i):
+            #     subelt.set(str(att[2]), str(att[3]))
             elt.append(subelt)
     else:
         # the first part (if) will be removed in the medium term (we will systematically use the XML <condition>)
@@ -221,7 +234,7 @@ def _objectives():
 def _annotations():
     elt = _element(TypeXML.ANNOTATIONS)
     for ce in AnnEntities.items:
-        elt.append(_constraint(ce, possible_simplified_form=True))
+        elt.append(_constraint(ce, possible_simplified_form=False))
     return elt
 
 

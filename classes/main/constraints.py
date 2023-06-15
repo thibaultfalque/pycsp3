@@ -6,6 +6,7 @@ from pycsp3.classes.auxiliary.conditions import Condition, ConditionInterval, Co
 from pycsp3.classes.auxiliary.ptypes import TypeVar, TypeCtr, TypeCtrArg, TypeXML, TypeConditionOperator, TypeRank
 from pycsp3.classes.auxiliary.values import IntegerEntity
 from pycsp3.classes.entities import EVarArray, ECtr, EMetaCtr, TypeNode, Node, possible_range
+from pycsp3.classes import main
 from pycsp3.classes.main.domains import Domain
 from pycsp3.classes.main.variables import Variable, VariableInteger
 from pycsp3.dashboard import options
@@ -42,7 +43,7 @@ class Diffs:
 
 class ConstraintArgument:
     def __init__(self, name, content, attributes=[], content_compressible=True, content_ordered=False, lifted=False):
-        assert isinstance(name, (TypeCtrArg, TypeXML)), str(name) + " " + str(type(name))
+        assert isinstance(name, (TypeCtrArg, TypeXML, main.annotations.TypeAnnArg)), str(name) + " " + str(type(name))
         self.name = name  # name of the argument
         self.attributes = attributes  # list of pairs (key, value) representing the attributes
         self.content = content  # content of the argument
@@ -379,7 +380,8 @@ class ConstraintAllDifferentList(ConstraintUnmergeable):
     def __init__(self, lst, excepting):
         super().__init__(TypeCtr.ALL_DIFFERENT)
         self.arg(TypeCtrArg.LIST, lst, content_ordered=True, lifted=True)
-        self.arg(TypeCtrArg.EXCEPT, "(" + ",".join(str(v) for v in excepting) + ")" if excepting else excepting)
+        if excepting is not None:
+            self.arg(TypeCtrArg.EXCEPT, "(" + ",".join(str(v) for v in excepting) + ")")  # if excepting else excepting)
 
 
 class ConstraintAllDifferentMatrix(ConstraintUnmergeable):
@@ -776,6 +778,34 @@ class ConstraintInstantiation(Constraint):
         self.arg(TypeCtrArg.VALUES, values, content_ordered=True)
 
 
+''' Slide Constraints (when posted directly) '''
+
+
+class ConstraintSlide(ConstraintUnmergeable):
+    def __init__(self, variables, slide_expression, circular=None, offset=None, collect=None):
+        super().__init__(TypeCtr.SLIDE)
+        assert slide_expression is not None  # the meta-constraint is defined directly by the user
+        variables = list(variables) if isinstance(variables, tuple) else variables
+        if circular is True:
+            self.attributes.append((TypeXML.CIRCULAR, "true"))
+        n_offsets = 0 if offset is None else 1 if isinstance(offset, int) else len(offset)
+        n_collects = 0 if collect is None else 1 if isinstance(collect, int) else len(collect)
+        assert n_offsets == 0 or n_collects == 0 or n_offsets == n_collects
+        k = max(1, n_offsets, n_collects)
+        if k == 1:  # only one list
+            atts = ([(TypeXML.OFFSET, offset)] if offset is not None and offset != 1 else []) + \
+                   ([(TypeXML.COLLECT, collect)] if collect is not None and collect != 1 else [])
+            self.arg(TypeCtrArg.LIST, flatten(variables), content_ordered=True, attributes=atts)
+        else:
+            assert isinstance(variables, list) and len(variables) == k and all(isinstance(l, (list, tuple)) for l in variables)
+            atts = [
+                ([(TypeXML.OFFSET, offset[i])] if offset and offset[i] != 1 else [])
+                + ([(TypeXML.COLLECT, collect[i])] if collect and collect[i] != 1 else [])
+                for i in range(k)]
+            self.arg(TypeCtrArg.LIST, variables, lifted=True, content_ordered=True, attributes=atts)
+        self.arg(TypeCtrArg.INTENTION, slide_expression)  # possibly transformed into extension later in xcsp
+
+
 ''' PartialConstraints and ScalarProduct '''
 
 
@@ -860,7 +890,11 @@ class PartialConstraint:  # constraint whose condition has not been given such a
             return Node.build(TypeNode.MUL, pair) if pair else PartialConstraint.combine_partial_objects(self, TypeNode.MUL, other)
         if not isinstance(self.constraint, ConstraintSum):
             return Node.build(TypeNode.MUL, self._simplify_operation(other))
+        # we have a ConstraintSum (self) and an integer (other)
+
         args = self.constraint.arguments
+        if TypeCtrArg.COEFFS not in args:  # or only 1 as coeffs? TODO
+            return auxiliary().replace_partial_constraint(self) * other
         cs = args[TypeCtrArg.COEFFS].content if TypeCtrArg.COEFFS in args else [1] * len(args[TypeCtrArg.LIST].content)
         value = args[TypeCtrArg.CONDITION]
         del args[TypeCtrArg.CONDITION]  # we delete and put back below this argument so as to have arguments in the right order
