@@ -1,3 +1,5 @@
+import sys
+
 from pycsp3.classes.entities import CtrEntities, EBlock, EGroup, ESlide, EToGather, EToSatisfy
 from pycsp3.classes.main.variables import Variable
 
@@ -20,7 +22,7 @@ def detect_slides_recursively(ctr_entities):
                     if res:
                         ce.scope, ce.offset, ce.circular = res  # the slide is validated: information for it is recorded
                     else:
-                        print("Warning: The slide is not really a slide but a group")
+                        print("Warning: The slide is not really a slide but a group",file=sys.stderr)
 
 
 def _identify_slide(group):

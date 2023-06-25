@@ -1,8 +1,10 @@
+import sys
+
 ORANGE, WHITE = '\033[93m', '\033[0m'
 
 
 def warning(message):
-    print("\n  " + ORANGE + "Warning: " + WHITE + message + "\n")
+    print("\n  " + ORANGE + "Warning: " + WHITE + message + "\n",file=sys.stderr)
 
 
 class _Options:

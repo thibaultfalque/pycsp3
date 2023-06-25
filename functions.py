@@ -856,7 +856,7 @@ def AllEqualList(term, *others, excepting=None):
     return ECtr(ConstraintAllEqualList(lists, excepting))
 
 
-def _ordered(term, others, operator, lengths):
+def _ordered(term, others, operator, lengths,excepting):
     terms = flatten(term, others)
     auxiliary().replace_partial_constraints_and_constraints_with_condition_and_possibly_nodes(terms, nodes_too=True)
     checkType(terms, [Variable])
@@ -872,10 +872,10 @@ def _ordered(term, others, operator, lengths):
         assert len(terms) == len(lengths) + 1
     if options.mini:
         return [expr(operator, terms[i] if lengths is None else terms[i] + lengths[i], terms[i + 1]) for i in range(len(terms) - 1)]
-    return ECtr(ConstraintOrdered(terms, operator, lengths))
+    return ECtr(ConstraintOrdered(terms, operator, lengths,excepting))
 
 
-def Increasing(term, *others, strict=False, lengths=None):
+def Increasing(term, *others, strict=False, lengths=None,excepting=None):
     """
     Builds and returns a constraint Increasing.
 
@@ -885,7 +885,7 @@ def Increasing(term, *others, strict=False, lengths=None):
     :param lengths: the lengths (durations) that must separate the values
     :return: a constraint Increasing
     """
-    return _ordered(term, others, TypeOrderedOperator.INCREASING if not strict else TypeOrderedOperator.STRICTLY_INCREASING, lengths)
+    return _ordered(term, others, TypeOrderedOperator.INCREASING if not strict else TypeOrderedOperator.STRICTLY_INCREASING, lengths,excepting)
 
 
 def Decreasing(term, *others, strict=False, lengths=None):

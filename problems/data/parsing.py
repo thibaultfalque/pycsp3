@@ -1,5 +1,6 @@
 import os.path
 import re
+import sys
 from collections import OrderedDict
 
 from pycsp3.dashboard import options
@@ -44,7 +45,7 @@ class DataParser:
 
     def curr_line(self):
         if self.curr_line_index >= len(self.lines):
-            print("Warning: no more line")
+            print("Warning: no more line",file=sys.stderr)
             return None
         return self.lines[self.curr_line_index]
 

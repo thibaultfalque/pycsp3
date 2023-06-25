@@ -406,10 +406,12 @@ class ConstraintAllEqualList(ConstraintUnmergeable):
 
 
 class ConstraintOrdered(Constraint):
-    def __init__(self, lst, operator, lengths):
+    def __init__(self, lst, operator, lengths,excepting):
         super().__init__(TypeCtr.ORDERED)
         self.arg(TypeCtrArg.LIST, lst, content_ordered=True)
         self.arg(TypeCtrArg.LENGTHS, lengths, content_ordered=True)
+        if excepting is not None:
+            self.arg(TypeCtrArg.EXCEPT,excepting)
         self.arg(TypeCtrArg.OPERATOR, operator)
 
 

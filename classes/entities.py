@@ -1,4 +1,5 @@
 import re
+import sys
 import types
 from enum import Enum, unique
 from functools import reduce
@@ -125,7 +126,7 @@ class ECtr(Entity):
         super().__init__(None)  # no need to have an id here
         if c is None:
             self.constraint = None
-            print("Warning: a constraint is None")
+            print("Warning: a constraint is None",file=sys.stderr)
         else:
             self.constraint = c
             # CtrEntities.allEntities.append(self)

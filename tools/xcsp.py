@@ -1,3 +1,4 @@
+import sys
 from collections import OrderedDict
 
 from lxml import etree
@@ -245,14 +246,14 @@ def build_document():
     if len(variables) > 0:
         root.append(variables)
     else:
-        print("Warning: no variables in this model (and so, no generated file)!")
+        print("Warning: no variables in this model (and so, no generated file)!",file=sys.stderr)
         return None
 
     constraints = _constraints()
     if len(constraints) > 0:
         root.append(constraints)
     else:
-        print("Warning: no constraints for this model!")
+        print("Warning: no constraints for this model!",file=sys.stderr)
 
     objectives = _objectives()
     if len(objectives) > 0:
